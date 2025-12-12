@@ -1,1 +1,1 @@
-"""Tests for Home Assistant."""
+"""Define package tests."""
