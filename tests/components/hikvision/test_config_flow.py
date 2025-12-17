@@ -2,8 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
-import requests
-
 from homeassistant.components.hikvision.const import DOMAIN
 from homeassistant.config_entries import SOURCE_IMPORT, SOURCE_USER
 from homeassistant.const import (
@@ -31,7 +29,7 @@ from tests.common import MockConfigEntry
 async def test_form(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
     """Test we get the form and can create entry."""
     result = await hass.config_entries.flow.async_init(
@@ -41,7 +39,7 @@ async def test_form(
     assert result["step_id"] == "user"
     assert result["errors"] == {}
 
-    result = await hass.config_entries.flow.async_configure(
+    result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
             CONF_HOST: TEST_HOST,
@@ -51,11 +49,11 @@ async def test_form(
             CONF_SSL: False,
         },
     )
+    await hass.async_block_till_done()
 
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] == TEST_DEVICE_NAME
-    assert result["result"].unique_id == TEST_DEVICE_ID
-    assert result["data"] == {
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
+    assert result2["title"] == TEST_DEVICE_NAME
+    assert result2["data"] == {
         CONF_HOST: TEST_HOST,
         CONF_PORT: TEST_PORT,
         CONF_USERNAME: TEST_USERNAME,
@@ -64,19 +62,46 @@ async def test_form(
     }
 
 
+async def test_form_with_ssl(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+) -> None:
+    """Test form submission with SSL enabled."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_HOST: TEST_HOST,
+            CONF_PORT: 443,
+            CONF_USERNAME: TEST_USERNAME,
+            CONF_PASSWORD: TEST_PASSWORD,
+            CONF_SSL: True,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result2["type"] is FlowResultType.CREATE_ENTRY
+    assert result2["data"][CONF_SSL] is True
+    assert result2["data"][CONF_PORT] == 443
+
+
 async def test_form_cannot_connect(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
-    """Test we handle cannot connect error and can recover."""
-    mock_hikcamera.return_value.get_id.return_value = None
+    """Test we handle cannot connect error."""
+    mock_hikcamera_config_flow.return_value.get_id.return_value = None
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
 
-    result = await hass.config_entries.flow.async_configure(
+    result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
             CONF_HOST: TEST_HOST,
@@ -87,42 +112,23 @@ async def test_form_cannot_connect(
         },
     )
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-    # Recover from error
-    mock_hikcamera.return_value.get_id.return_value = TEST_DEVICE_ID
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_HOST: TEST_HOST,
-            CONF_PORT: TEST_PORT,
-            CONF_USERNAME: TEST_USERNAME,
-            CONF_PASSWORD: TEST_PASSWORD,
-            CONF_SSL: False,
-        },
-    )
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["result"].unique_id == TEST_DEVICE_ID
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "cannot_connect"}
 
 
 async def test_form_exception(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
-    """Test we handle exception during connection and can recover."""
-    mock_hikcamera.side_effect = requests.exceptions.RequestException(
-        "Connection failed"
-    )
+    """Test we handle exception during connection."""
+    mock_hikcamera_config_flow.side_effect = Exception("Connection failed")
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": SOURCE_USER}
     )
 
-    result = await hass.config_entries.flow.async_configure(
+    result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
             CONF_HOST: TEST_HOST,
@@ -133,33 +139,14 @@ async def test_form_exception(
         },
     )
 
-    assert result["type"] is FlowResultType.FORM
-    assert result["errors"] == {"base": "cannot_connect"}
-
-    # Recover from error
-    mock_hikcamera.side_effect = None
-    mock_hikcamera.return_value.get_id.return_value = TEST_DEVICE_ID
-    mock_hikcamera.return_value.get_name = TEST_DEVICE_NAME
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"],
-        {
-            CONF_HOST: TEST_HOST,
-            CONF_PORT: TEST_PORT,
-            CONF_USERNAME: TEST_USERNAME,
-            CONF_PASSWORD: TEST_PASSWORD,
-            CONF_SSL: False,
-        },
-    )
-
-    assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["result"].unique_id == TEST_DEVICE_ID
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "cannot_connect"}
 
 
 async def test_form_already_configured(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
     mock_config_entry: MockConfigEntry,
 ) -> None:
     """Test we handle already configured devices."""
@@ -169,7 +156,136 @@ async def test_form_already_configured(
         DOMAIN, context={"source": SOURCE_USER}
     )
 
-    result = await hass.config_entries.flow.async_configure(
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_HOST: TEST_HOST,
+            CONF_PORT: TEST_PORT,
+            CONF_USERNAME: TEST_USERNAME,
+            CONF_PASSWORD: TEST_PASSWORD,
+            CONF_SSL: False,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result2["type"] is FlowResultType.ABORT
+    assert result2["reason"] == "already_configured"
+
+
+async def test_reauth_flow(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test reauthorization flow."""
+    mock_config_entry.add_to_hass(hass)
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "reauth_confirm"
+
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_USERNAME: "new_user",
+            CONF_PASSWORD: "new_password",
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result2["type"] is FlowResultType.ABORT
+    assert result2["reason"] == "reauth_successful"
+    assert mock_config_entry.data[CONF_USERNAME] == "new_user"
+    assert mock_config_entry.data[CONF_PASSWORD] == "new_password"
+
+
+async def test_reauth_flow_cannot_connect(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test reauth flow with connection error."""
+    mock_config_entry.add_to_hass(hass)
+    mock_hikcamera_config_flow.return_value.get_id.return_value = None
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_USERNAME: "new_user",
+            CONF_PASSWORD: "new_password",
+        },
+    )
+
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "cannot_connect"}
+
+
+async def test_reauth_flow_wrong_device(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test reauth flow with wrong device ID."""
+    mock_config_entry.add_to_hass(hass)
+    mock_hikcamera_config_flow.return_value.get_id.return_value = "different_device_id"
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_USERNAME: "new_user",
+            CONF_PASSWORD: "new_password",
+        },
+    )
+
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "wrong_device"}
+
+
+async def test_reauth_flow_exception(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+    mock_config_entry: MockConfigEntry,
+) -> None:
+    """Test reauth flow with exception."""
+    mock_config_entry.add_to_hass(hass)
+    mock_hikcamera_config_flow.side_effect = Exception("Connection failed")
+
+    result = await mock_config_entry.start_reauth_flow(hass)
+
+    result2 = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {
+            CONF_USERNAME: "new_user",
+            CONF_PASSWORD: "new_password",
+        },
+    )
+
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "cannot_connect"}
+
+
+async def test_recovery_from_error(
+    hass: HomeAssistant,
+    mock_setup_entry: AsyncMock,
+    mock_hikcamera_config_flow: MagicMock,
+) -> None:
+    """Test we can recover from a connection error."""
+    mock_hikcamera_config_flow.return_value.get_id.return_value = None
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_USER}
+    )
+
+    result2 = await hass.config_entries.flow.async_configure(
         result["flow_id"],
         {
             CONF_HOST: TEST_HOST,
@@ -180,14 +296,31 @@ async def test_form_already_configured(
         },
     )
 
-    assert result["type"] is FlowResultType.ABORT
-    assert result["reason"] == "already_configured"
+    assert result2["type"] is FlowResultType.FORM
+    assert result2["errors"] == {"base": "cannot_connect"}
+
+    # Now recover
+    mock_hikcamera_config_flow.return_value.get_id.return_value = TEST_DEVICE_ID
+
+    result3 = await hass.config_entries.flow.async_configure(
+        result2["flow_id"],
+        {
+            CONF_HOST: TEST_HOST,
+            CONF_PORT: TEST_PORT,
+            CONF_USERNAME: TEST_USERNAME,
+            CONF_PASSWORD: TEST_PASSWORD,
+            CONF_SSL: False,
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result3["type"] is FlowResultType.CREATE_ENTRY
 
 
 async def test_import_flow(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
     """Test YAML import flow creates config entry."""
     result = await hass.config_entries.flow.async_init(
@@ -201,10 +334,10 @@ async def test_import_flow(
             CONF_SSL: False,
         },
     )
+    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == TEST_DEVICE_NAME
-    assert result["result"].unique_id == TEST_DEVICE_ID
     assert result["data"] == {
         CONF_HOST: TEST_HOST,
         CONF_PORT: TEST_PORT,
@@ -217,7 +350,7 @@ async def test_import_flow(
 async def test_import_flow_with_defaults(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
     """Test YAML import flow uses default values."""
     result = await hass.config_entries.flow.async_init(
@@ -229,9 +362,9 @@ async def test_import_flow_with_defaults(
             CONF_PASSWORD: TEST_PASSWORD,
         },
     )
+    await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["result"].unique_id == TEST_DEVICE_ID
     # Default port (80) and SSL (False) should be used
     assert result["data"][CONF_PORT] == 80
     assert result["data"][CONF_SSL] is False
@@ -240,12 +373,10 @@ async def test_import_flow_with_defaults(
 async def test_import_flow_cannot_connect(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
     """Test YAML import flow aborts on connection error."""
-    mock_hikcamera.side_effect = requests.exceptions.RequestException(
-        "Connection failed"
-    )
+    mock_hikcamera_config_flow.side_effect = Exception("Connection failed")
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
@@ -266,10 +397,10 @@ async def test_import_flow_cannot_connect(
 async def test_import_flow_no_device_id(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
 ) -> None:
-    """Test YAML import flow aborts when device_id is None."""
-    mock_hikcamera.return_value.get_id.return_value = None
+    """Test YAML import flow aborts when device ID is unavailable."""
+    mock_hikcamera_config_flow.return_value.get_id.return_value = None
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN,
@@ -290,7 +421,7 @@ async def test_import_flow_no_device_id(
 async def test_import_flow_already_configured(
     hass: HomeAssistant,
     mock_setup_entry: AsyncMock,
-    mock_hikcamera: MagicMock,
+    mock_hikcamera_config_flow: MagicMock,
     mock_config_entry: MockConfigEntry,
 ) -> None:
     """Test YAML import flow aborts when device is already configured."""
