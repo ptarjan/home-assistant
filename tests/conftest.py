@@ -1270,9 +1270,12 @@ def evict_faked_translations(translations_once) -> Generator[_patch]:
     component_paths = components.__path__
 
     for call in mock_component_strings.mock_calls:
+        components_loaded: set[str] = call.args[2]
         integrations: dict[str, loader.Integration] = call.args[3]
-        for domain, integration in integrations.items():
-            if any(
+        for domain in components_loaded:
+            integration = integrations.get(domain)
+            # Evict if no integration loaded, or if integration path is fake
+            if integration is not None and any(
                 pathlib.Path(f"{component_path}/{domain}") == integration.file_path
                 for component_path in component_paths
             ):
