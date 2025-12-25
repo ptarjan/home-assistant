@@ -13,9 +13,6 @@ from homeassistant.const import (
     CONF_SSL,
     CONF_USERNAME,
 )
-from homeassistant.core import HomeAssistant
-
-from . import setup_integration
 
 from tests.common import MockConfigEntry
 
@@ -83,12 +80,3 @@ def mock_hikcamera() -> Generator[MagicMock]:
             "2024-01-01T00:00:00Z",
         )
         yield hikcamera_mock
-
-
-@pytest.fixture
-async def init_integration(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_hikcamera: MagicMock
-) -> MockConfigEntry:
-    """Set up the Hikvision integration for testing."""
-    await setup_integration(hass, mock_config_entry)
-    return mock_config_entry

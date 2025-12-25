@@ -54,8 +54,10 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
                 device_id = camera.get_id()
                 device_name = camera.get_name
             except requests.exceptions.RequestException:
-                _LOGGER.exception("Error connecting to Hikvision device")
                 errors["base"] = "cannot_connect"
+            except Exception:
+                _LOGGER.exception("Unexpected exception")
+                errors["base"] = "unknown"
             else:
                 if device_id is None:
                     errors["base"] = "cannot_connect"
@@ -107,20 +109,16 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
             device_id = camera.get_id()
             device_name = camera.get_name
         except requests.exceptions.RequestException:
-            _LOGGER.exception(
-                "Error connecting to Hikvision device during import, aborting"
-            )
             return self.async_abort(reason="cannot_connect")
+        except Exception:
+            _LOGGER.exception("Unexpected exception")
+            return self.async_abort(reason="unknown")
 
         if device_id is None:
             return self.async_abort(reason="cannot_connect")
 
         await self.async_set_unique_id(device_id)
         self._abort_if_unique_id_configured()
-
-        _LOGGER.warning(
-            "Importing Hikvision config from configuration.yaml for %s", host
-        )
 
         return self.async_create_entry(
             title=name or device_name or host,
