@@ -416,39 +416,3 @@ class HikvisionISAPIClient:
                 continue
 
         return sorted(recordings, key=lambda x: x.start_time, reverse=True)
-
-    def get_playback_url(self, recording: Recording) -> str:
-        """Get the playback URL for a recording.
-
-        For RTSP URLs, we return them directly for streaming.
-        For other URLs, we may need to construct them from the recording data.
-
-        Args:
-            recording: The recording to get the playback URL for.
-
-        Returns:
-            The playback URL string.
-
-        """
-        if recording.playback_uri:
-            # If the URI is an RTSP URL, return it with credentials
-            if recording.playback_uri.startswith("rtsp://"):
-                # Insert credentials into RTSP URL
-                # Replace rtsp:// with rtsp://user:pass@
-                return recording.playback_uri.replace(
-                    "rtsp://",
-                    f"rtsp://{self._camera.usr}:{self._camera.pwd}@",
-                    1,
-                )
-            return recording.playback_uri
-
-        # Construct RTSP URL from recording data
-        host = self._camera.root_url.replace("http://", "").replace("https://", "")
-        start_str = recording.start_time.strftime("%Y%m%dT%H%M%SZ")
-        end_str = recording.end_time.strftime("%Y%m%dT%H%M%SZ")
-
-        return (
-            f"rtsp://{self._camera.usr}:{self._camera.pwd}@{host}:554/"
-            f"Streaming/tracks/{recording.track_id}/"
-            f"?starttime={start_str}&endtime={end_str}"
-        )

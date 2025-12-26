@@ -19,12 +19,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .helpers import (
-    HikvisionChannel,
-    get_nvr_events,
-    get_video_channels,
-    inject_events_into_camera,
-)
+from .helpers import HikvisionChannel, get_video_channels
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,17 +64,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
 
     device_name = camera.get_name or host
     device_type = camera.get_type or "Camera"
-
-    # For NVRs, pyhik may not detect events with 'record' notification method
-    # Fetch events separately and inject them into the camera object
-    if device_type == "NVR" or not camera.current_event_states:
-        nvr_events = await hass.async_add_executor_job(
-            get_nvr_events, host, port, username, password, ssl
-        )
-        if nvr_events:
-            await hass.async_add_executor_job(
-                inject_events_into_camera, camera, nvr_events
-            )
 
     # Discover video channels for camera entities
     channels = await hass.async_add_executor_job(
