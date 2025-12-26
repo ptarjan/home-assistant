@@ -68,7 +68,6 @@ class HikvisionHLSView(HomeAssistantView):
         """Kill any existing ffmpeg processes to free bandwidth."""
         for old_stream_id, proc in list(self._active_ffmpeg.items()):
             if old_stream_id != current_stream_id and proc.returncode is None:
-                _LOGGER.debug("Killing old ffmpeg stream: %s", old_stream_id)
                 proc.kill()
                 await proc.wait()
                 old_dir = _get_hls_dir(old_stream_id)
@@ -148,7 +147,6 @@ class HikvisionHLSView(HomeAssistantView):
             "append_list",
             playlist_path,
         ]
-        _LOGGER.debug("Starting ffmpeg with HTTP download for stream %s", stream_id)
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdin=asyncio.subprocess.PIPE,
@@ -218,9 +216,6 @@ class HikvisionHLSView(HomeAssistantView):
                     if segments:
                         seg_path = os.path.join(hls_dir, segments[0])
                         if os.path.getsize(seg_path) > 10000:
-                            _LOGGER.debug(
-                                "Stream %s ready: %d segments", stream_id, len(segments)
-                            )
                             return None
                 except (OSError, IndexError):
                     pass
@@ -332,7 +327,6 @@ class HikvisionMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
-        _LOGGER.debug("async_resolve_media called with identifier: %s", item.identifier)
         if item.identifier is None:
             raise Unresolvable("No media item identifier provided")
 
@@ -365,15 +359,6 @@ class HikvisionMediaSource(MediaSource):
         else:
             raise Unresolvable(f"Unknown media item type '{item_type}'")
 
-        _LOGGER.debug(
-            "Parsed: track=%s, start=%s, end=%s, offset=%ds, uri=%s",
-            track_id_str,
-            start_time_str,
-            end_time_str,
-            offset_seconds,
-            playback_uri[:50] if playback_uri else "none",
-        )
-
         entry = self._get_config_entry(config_entry_id)
         if entry is None:
             raise Unresolvable(f"Config entry {config_entry_id} not found")
@@ -382,7 +367,6 @@ class HikvisionMediaSource(MediaSource):
         if playback_uri:
             # Decode the playback URI (it's URL-encoded from the identifier)
             decoded_uri = unquote(playback_uri)
-            _LOGGER.debug("Decoded URI: %s", decoded_uri)
         else:
             # Construct playback URI from parameters
             camera = entry.runtime_data.camera
@@ -406,11 +390,6 @@ class HikvisionMediaSource(MediaSource):
                 decoded_uri = decoded_uri.replace(
                     f"starttime={start_str}Z", f"starttime={new_start_str}Z"
                 )
-                _LOGGER.debug(
-                    "Seeking to offset %ds: new starttime=%s",
-                    offset_seconds,
-                    new_start_str,
-                )
 
         # Use HTTP download + ffmpeg transcoding for browser-compatible playback
         # This bypasses RTSP connection limits while still providing HLS output
@@ -422,8 +401,6 @@ class HikvisionMediaSource(MediaSource):
             f"/api/hikvision/hls/{config_entry_id}/{stream_id}"
             f"?playback_uri={encoded_uri}"
         )
-
-        _LOGGER.debug("Using HTTP download + HLS transcode: %s", hls_url[:80])
 
         return PlayMedia(hls_url, "application/x-mpegURL")
 
@@ -516,9 +493,6 @@ class HikvisionMediaSource(MediaSource):
             HikvisionISAPIClient, entry.runtime_data.camera
         )
         channels = await self.hass.async_add_executor_job(client.get_channels)
-        _LOGGER.debug(
-            "Got channels for %s: %s", entry.runtime_data.device_name, channels
-        )
 
         children: list[BrowseMediaSource] = [
             BrowseMediaSource(
@@ -562,18 +536,10 @@ class HikvisionMediaSource(MediaSource):
 
         # Convert channel ID to track ID (channel 1 = track 101, channel 2 = track 201, etc.)
         actual_track_id = track_id * 100 + 1
-        _LOGGER.debug(
-            "Searching recording days for channel %s (track %s) from %s to %s",
-            track_id,
-            actual_track_id,
-            start_date,
-            now,
-        )
 
         recording_days = await self.hass.async_add_executor_job(
             client.get_recording_days, actual_track_id, start_date, now
         )
-        _LOGGER.debug("Found %s recording days", len(recording_days))
 
         children: list[BrowseMediaSource] = []
         for day in recording_days:

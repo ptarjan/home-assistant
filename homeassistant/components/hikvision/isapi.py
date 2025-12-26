@@ -85,13 +85,7 @@ class HikvisionISAPIClient:
         channels = []
         try:
             url = f"{self._base_url}/ISAPI/ContentMgmt/InputProxy/channels"
-            _LOGGER.debug("Fetching channels from: %s", url)
             response = self._session.get(url, timeout=10)
-            _LOGGER.debug(
-                "Response status: %s, content length: %s",
-                response.status_code,
-                len(response.content),
-            )
             if response.status_code == 200:
                 root = DefusedET.fromstring(response.content)
                 for channel in root.findall(".//ns:InputProxyChannel", NS):
@@ -108,8 +102,8 @@ class HikvisionISAPIClient:
                                 ),
                             }
                         )
-        except (requests.RequestException, ET.ParseError) as err:
-            _LOGGER.debug("Failed to get channels: %s", err)
+        except (requests.RequestException, ET.ParseError):
+            pass
 
         # If no channels found via InputProxy, try streaming channels
         if not channels:
@@ -157,8 +151,8 @@ class HikvisionISAPIClient:
                                     ),
                                 }
                             )
-        except (requests.RequestException, ET.ParseError) as err:
-            _LOGGER.debug("Failed to get streaming channels: %s", err)
+        except (requests.RequestException, ET.ParseError):
+            pass
 
         return channels
 
@@ -221,25 +215,10 @@ class HikvisionISAPIClient:
                 )
 
                 if response.status_code != 200:
-                    _LOGGER.debug(
-                        "Window %s (%s to %s): HTTP %s",
-                        window_num,
-                        current_start.date(),
-                        current_end.date(),
-                        response.status_code,
-                    )
                     current_start = current_end
                     continue
 
                 root = DefusedET.fromstring(response.content)
-
-                # Get number of matches
-                num_matches_elem = root.find(".//ns:numOfMatches", NS)
-                num_matches = (
-                    int(num_matches_elem.text)
-                    if num_matches_elem is not None and num_matches_elem.text
-                    else 0
-                )
 
                 for match in root.findall(".//ns:searchMatchItem", NS):
                     time_span = match.find("ns:timeSpan", NS)
@@ -264,15 +243,6 @@ class HikvisionISAPIClient:
                             ),
                             has_recordings=True,
                         )
-
-                _LOGGER.debug(
-                    "Window %s (%s to %s): %s matches, total days=%s",
-                    window_num,
-                    current_start.date(),
-                    current_end.date(),
-                    num_matches,
-                    len(days_with_recordings),
-                )
 
             except (requests.RequestException, ET.ParseError) as err:
                 _LOGGER.warning("Failed to search window %s: %s", window_num, err)
@@ -411,8 +381,7 @@ class HikvisionISAPIClient:
                     )
                 )
 
-            except (ValueError, AttributeError) as err:
-                _LOGGER.debug("Failed to parse recording: %s", err)
+            except (ValueError, AttributeError):
                 continue
 
         return sorted(recordings, key=lambda x: x.start_time, reverse=True)

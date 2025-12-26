@@ -44,7 +44,6 @@ async def async_setup_entry(
     channels = data.channels
 
     if not channels:
-        _LOGGER.debug("No video channels found on device")
         return
 
     async_add_entities(

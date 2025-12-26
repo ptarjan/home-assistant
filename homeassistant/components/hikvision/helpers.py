@@ -58,7 +58,6 @@ def get_video_channels(
             continue
 
     if response is None or response.status_code != 200:
-        _LOGGER.debug("Unable to fetch video channels from device, trying streaming")
         # Fall back to streaming channels endpoint
         try:
             response = session.get(f"{root_url}/ISAPI/Streaming/channels", timeout=10)
