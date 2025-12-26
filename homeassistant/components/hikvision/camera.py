@@ -96,6 +96,8 @@ class HikvisionCamera(Camera):
 
         # Cache for snapshot image
         self._last_image: bytes | None = None
+        # Track error state to avoid log spam
+        self._snapshot_error_logged: bool = False
 
     @property
     def _host(self) -> str:
@@ -159,18 +161,28 @@ class HikvisionCamera(Camera):
             )
             response.raise_for_status()
             self._last_image = response.content
+            # Log recovery if we previously had errors
+            if self._snapshot_error_logged:
+                _LOGGER.info("Snapshot recovered for %s", self._channel.name)
+                self._snapshot_error_logged = False
         except httpx.TimeoutException:
-            _LOGGER.warning("Timeout getting snapshot from %s", self._channel.name)
+            if not self._snapshot_error_logged:
+                _LOGGER.warning("Timeout getting snapshot from %s", self._channel.name)
+                self._snapshot_error_logged = True
         except httpx.HTTPStatusError as err:
-            _LOGGER.warning(
-                "HTTP error getting snapshot from %s: %s",
-                self._channel.name,
-                err.response.status_code,
-            )
+            if not self._snapshot_error_logged:
+                _LOGGER.warning(
+                    "HTTP error getting snapshot from %s: %s",
+                    self._channel.name,
+                    err.response.status_code,
+                )
+                self._snapshot_error_logged = True
         except httpx.RequestError as err:
-            _LOGGER.warning(
-                "Error getting snapshot from %s: %s", self._channel.name, err
-            )
+            if not self._snapshot_error_logged:
+                _LOGGER.warning(
+                    "Error getting snapshot from %s: %s", self._channel.name, err
+                )
+                self._snapshot_error_logged = True
 
         return self._last_image
 
