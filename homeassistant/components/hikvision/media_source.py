@@ -95,15 +95,27 @@ class HikvisionHLSView(HomeAssistantView):
             k: v for k, v in self._active_ffmpeg.items() if k == current_stream_id
         }
 
+    @classmethod
+    async def async_cleanup_all(cls) -> None:
+        """Clean up all active ffmpeg processes."""
+        for proc in cls._active_ffmpeg.values():
+            if proc.returncode is None:
+                proc.kill()
+        cls._active_ffmpeg.clear()
+
     async def _start_ffmpeg(
         self, stream_id: str, rtsp_uri: str, hls_dir: str, playlist_path: str
     ) -> asyncio.subprocess.Process:
         """Start ffmpeg process for HLS streaming."""
         await self._cleanup_old_streams(stream_id)
 
+        # Use run_in_executor to avoid blocking the event loop
+        loop = asyncio.get_event_loop()
         if os.path.exists(hls_dir):
-            shutil.rmtree(hls_dir, ignore_errors=True)
-        os.makedirs(hls_dir, exist_ok=True)
+            await loop.run_in_executor(
+                None, lambda: shutil.rmtree(hls_dir, ignore_errors=True)
+            )
+        await loop.run_in_executor(None, lambda: os.makedirs(hls_dir, exist_ok=True))
 
         cmd = [
             "ffmpeg",
@@ -152,7 +164,7 @@ class HikvisionHLSView(HomeAssistantView):
             if proc.stderr:
                 stderr = await proc.stderr.read()
                 if stderr:
-                    _LOGGER.debug("Ffmpeg stderr: %s", stderr.decode()[:500])
+                    _LOGGER.warning("Ffmpeg stderr: %s", stderr.decode()[:1000])
 
         self._stderr_task = asyncio.create_task(log_stderr())
         return proc
@@ -240,10 +252,31 @@ class HikvisionHLSView(HomeAssistantView):
         )
 
 
+def _cleanup_hls_temp_dir() -> None:
+    """Clean up HLS temp directory."""
+    hls_base = os.path.join(tempfile.gettempdir(), "hikvision_hls")
+    if os.path.exists(hls_base):
+        shutil.rmtree(hls_base, ignore_errors=True)
+
+
 async def async_get_media_source(hass: HomeAssistant) -> HikvisionMediaSource:
     """Set up Hikvision media source."""
+    # Clean up any stale temp files from previous runs
+    await hass.async_add_executor_job(_cleanup_hls_temp_dir)
+
     # Register the custom HLS view that uses ffmpeg subprocess
     hass.http.register_view(HikvisionHLSView())
+
+    # Register cleanup on shutdown
+    async def _async_cleanup(_event: Any) -> None:
+        """Clean up on shutdown."""
+        # Kill any running ffmpeg processes
+        await HikvisionHLSView.async_cleanup_all()
+        # Clean up temp files
+        await hass.async_add_executor_job(_cleanup_hls_temp_dir)
+
+    hass.bus.async_listen_once("homeassistant_stop", _async_cleanup)
+
     return HikvisionMediaSource(hass)
 
 
@@ -567,9 +600,8 @@ class HikvisionMediaSource(MediaSource):
 
         children: list[BrowseMediaSource] = []
         for recording in recordings:
-            # Calculate duration
+            # Calculate duration for display
             duration = recording.end_time - recording.start_time
-            duration_seconds = duration.total_seconds()
             duration_str = str(duration).split(".", maxsplit=1)[
                 0
             ]  # Remove microseconds
@@ -587,39 +619,21 @@ class HikvisionMediaSource(MediaSource):
             start_str = recording.start_time.strftime("%Y%m%dT%H%M%SZ")
             end_str = recording.end_time.strftime("%Y%m%dT%H%M%SZ")
 
-            # For recordings > 30 min, make them expandable with time slots
-            # NOT directly playable - user must pick a time slot
-            if duration_seconds > 1800:  # 30 minutes
-                children.append(
-                    BrowseMediaSource(
-                        domain=DOMAIN,
-                        identifier=(
-                            f"RECORDING|{config_entry_id}|{track_id}|"
-                            f"{start_str}|{end_str}|{encoded_uri}"
-                        ),
-                        media_class=MediaClass.DIRECTORY,  # Show as folder
-                        media_content_type=MediaType.PLAYLIST,
-                        title=f"[+] {title}",  # Expandable indicator
-                        can_play=False,  # Must expand to pick time slot
-                        can_expand=True,  # Can expand for time slots
-                    )
+            # All recordings are expandable with time slots
+            children.append(
+                BrowseMediaSource(
+                    domain=DOMAIN,
+                    identifier=(
+                        f"RECORDING|{config_entry_id}|{track_id}|"
+                        f"{start_str}|{end_str}|{encoded_uri}"
+                    ),
+                    media_class=MediaClass.DIRECTORY,
+                    media_content_type=MediaType.PLAYLIST,
+                    title=f"[+] {title}",
+                    can_play=False,
+                    can_expand=True,
                 )
-            else:
-                # Short recordings play directly
-                children.append(
-                    BrowseMediaSource(
-                        domain=DOMAIN,
-                        identifier=(
-                            f"FILE|{config_entry_id}|{track_id}|"
-                            f"{start_str}|{end_str}|{encoded_uri}"
-                        ),
-                        media_class=MediaClass.VIDEO,
-                        media_content_type=MediaType.VIDEO,
-                        title=title,
-                        can_play=True,
-                        can_expand=False,
-                    )
-                )
+            )
 
         date_str = f"{year}-{month:02d}-{day:02d}"
 
