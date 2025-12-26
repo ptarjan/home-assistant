@@ -60,6 +60,21 @@ class HikvisionISAPIClient:
         self._session.auth = self._auth
         self._session.verify = False  # Many Hikvision devices use self-signed certs
 
+    @property
+    def base_url(self) -> str:
+        """Return the base URL for the device."""
+        return self._base_url
+
+    @property
+    def username(self) -> str:
+        """Return the username for authentication."""
+        return self._camera.usr
+
+    @property
+    def password(self) -> str:
+        """Return the password for authentication."""
+        return self._camera.pwd
+
     def get_channels(self) -> list[dict]:
         """Get available channels from the device.
 

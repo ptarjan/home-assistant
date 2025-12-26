@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+import binascii
 from datetime import datetime, timedelta
-import hashlib
 import logging
 import os
 import re
@@ -15,6 +16,7 @@ from urllib.parse import quote_plus, unquote
 
 import aiofiles
 from aiohttp import web
+import httpx
 
 from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.media_player import MediaClass, MediaType
@@ -259,12 +261,122 @@ def _cleanup_hls_temp_dir() -> None:
         shutil.rmtree(hls_base, ignore_errors=True)
 
 
+class HikvisionDownloadView(HomeAssistantView):
+    """View to proxy video downloads from Hikvision via HTTP (bypasses RTSP limit)."""
+
+    url = "/api/hikvision/download/{config_entry_id}/{filename}"
+    name = "api:hikvision:download"
+    requires_auth = True
+
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize the download view."""
+        self.hass = hass
+
+    async def get(
+        self, request: web.Request, config_entry_id: str, filename: str
+    ) -> web.StreamResponse:
+        """Handle GET request for video download."""
+        # Decode the base64 filename to get the playback URI
+        try:
+            playback_uri = urlsafe_b64decode(filename.encode("utf-8")).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError) as err:
+            _LOGGER.error("Failed to decode playback URI: %s", err)
+            return web.Response(status=400, text="Invalid filename encoding")
+
+        # Get config entry
+        entry = None
+        for e in self.hass.config_entries.async_loaded_entries(DOMAIN):
+            if e.entry_id == config_entry_id:
+                entry = e
+                break
+
+        if entry is None:
+            return web.Response(status=404, text="Config entry not found")
+
+        # Get credentials from the ISAPI client
+        client = HikvisionISAPIClient(entry.runtime_data.camera)
+        base_url = client.base_url
+        username = client.username
+        password = client.password
+
+        # Build the download request XML
+        download_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<downloadRequest>
+<playbackURI>{playback_uri}</playbackURI>
+</downloadRequest>"""
+
+        download_url = f"{base_url}/ISAPI/ContentMgmt/download"
+        _LOGGER.debug("Starting HTTP download from: %s", download_url)
+
+        try:
+            # Use httpx with digest auth for async streaming
+            auth = httpx.DigestAuth(username, password)
+            async with (
+                httpx.AsyncClient(
+                    auth=auth,
+                    verify=False,
+                    timeout=httpx.Timeout(connect=15, read=None),
+                ) as http_client,
+                http_client.stream(
+                    "POST",
+                    download_url,
+                    content=download_xml,
+                    headers={"Content-Type": "application/xml"},
+                ) as resp,
+            ):
+                if resp.status_code != 200:
+                    _LOGGER.error(
+                        "Download failed: HTTP %s - %s",
+                        resp.status_code,
+                        resp.text[:200] if hasattr(resp, "text") else "unknown",
+                    )
+                    return web.Response(status=resp.status_code, text="Download failed")
+
+                # Get content type from response
+                content_type = resp.headers.get("content-type", "video/mp4")
+                if "octet-stream" in content_type:
+                    content_type = "video/mp4"
+
+                # Create streaming response
+                response = web.StreamResponse(
+                    status=200,
+                    headers={
+                        "Content-Type": content_type,
+                        "Content-Disposition": "inline",
+                    },
+                )
+                await response.prepare(request)
+
+                # Stream chunks to browser
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    await response.write(chunk)
+
+                await response.write_eof()
+                return response
+
+        except httpx.TimeoutException as err:
+            _LOGGER.error("Download timeout: %s", err)
+            return web.Response(status=504, text="Download timeout")
+        except httpx.HTTPError as err:
+            _LOGGER.error("Download HTTP error: %s", err)
+            return web.Response(status=502, text=f"Download error: {err}")
+
+
+def _generate_download_url(config_entry_id: str, playback_uri: str) -> str:
+    """Generate a download proxy URL for a recording."""
+    encoded = urlsafe_b64encode(playback_uri.encode("utf-8")).decode("utf-8")
+    return f"/api/hikvision/download/{config_entry_id}/{encoded}"
+
+
 async def async_get_media_source(hass: HomeAssistant) -> HikvisionMediaSource:
     """Set up Hikvision media source."""
     # Clean up any stale temp files from previous runs
     await hass.async_add_executor_job(_cleanup_hls_temp_dir)
 
-    # Register the custom HLS view that uses ffmpeg subprocess
+    # Register the HTTP download view (preferred - bypasses RTSP connection limit)
+    hass.http.register_view(HikvisionDownloadView(hass))
+
+    # Register the custom HLS view as fallback
     hass.http.register_view(HikvisionHLSView())
 
     # Register cleanup on shutdown
@@ -338,52 +450,48 @@ class HikvisionMediaSource(MediaSource):
         if entry is None:
             raise Unresolvable(f"Config entry {config_entry_id} not found")
 
-        # Construct the RTSP URL for playback
+        # Construct the playback URI for HTTP download (bypasses RTSP connection limit)
         if playback_uri:
-            # Decode the playback URI
+            # Decode the playback URI (it's URL-encoded from the identifier)
             decoded_uri = unquote(playback_uri)
             _LOGGER.debug("Decoded URI: %s", decoded_uri)
-
-            # Add credentials to RTSP URL if needed
-            if decoded_uri.startswith("rtsp://") and "@" not in decoded_uri:
-                camera = entry.runtime_data.camera
-                decoded_uri = decoded_uri.replace(
-                    "rtsp://",
-                    f"rtsp://{camera.usr}:{camera.pwd}@",
-                    1,
-                )
-            # Use the main stream URI as-is (sub-stream doesn't have recordings)
-            rtsp_url = decoded_uri
         else:
-            # Construct RTSP URL from parameters
+            # Construct playback URI from parameters
             camera = entry.runtime_data.camera
             host = camera.root_url.replace("http://", "").replace("https://", "")
+            # Remove port if present for RTSP URL
+            if ":" in host:
+                host = host.split(":")[0]
             # Convert channel ID to track ID
             actual_track_id = int(track_id_str) * 100 + 1
-            rtsp_url = (
-                f"rtsp://{camera.usr}:{camera.pwd}@{host}:554/"
-                f"Streaming/tracks/{actual_track_id}/"
+            decoded_uri = (
+                f"rtsp://{host}:554/Streaming/tracks/{actual_track_id}/"
                 f"?starttime={start_time_str}&endtime={end_time_str}"
             )
 
-        _LOGGER.debug("Using ffmpeg HLS for: %s", rtsp_url.split("@")[-1][:80])
+        # Apply time offset by modifying the starttime in the URI
+        if offset_seconds > 0 and "starttime=" in decoded_uri:
+            match = re.search(r"starttime=(\d{8}T\d{6})Z", decoded_uri)
+            if match:
+                start_str = match.group(1)
+                start_time = datetime.strptime(start_str, "%Y%m%dT%H%M%S")
+                new_start = start_time + timedelta(seconds=offset_seconds)
+                new_start_str = new_start.strftime("%Y%m%dT%H%M%S")
+                decoded_uri = decoded_uri.replace(
+                    f"starttime={start_str}Z", f"starttime={new_start_str}Z"
+                )
+                _LOGGER.debug(
+                    "Seeking to offset %ds: new starttime=%s",
+                    offset_seconds,
+                    new_start_str,
+                )
 
-        # Use custom ffmpeg HLS endpoint that handles audio issues
-        # Generate a unique stream ID for this recording (include offset for different seek positions)
-        stream_key = f"{rtsp_url}_{offset_seconds}"
-        stream_id = hashlib.md5(stream_key.encode()).hexdigest()[:12]
+        # Use HTTP download endpoint (bypasses RTSP connection limit!)
+        # The playback URI is passed to /ISAPI/ContentMgmt/download via POST
+        download_url = _generate_download_url(config_entry_id, decoded_uri)
+        _LOGGER.debug("Using HTTP download (no RTSP): %s", download_url[:80])
 
-        encoded_uri = quote_plus(rtsp_url)
-        hls_url = f"/api/hikvision/hls/{config_entry_id}/{stream_id}?uri={encoded_uri}"
-
-        # Add offset parameter if seeking into the recording
-        if offset_seconds > 0:
-            hls_url += f"&offset={offset_seconds}"
-            _LOGGER.debug("Seeking to offset %ds in recording", offset_seconds)
-
-        _LOGGER.debug("Returning HLS URL: %s", hls_url[:100])
-
-        return PlayMedia(hls_url, "application/x-mpegURL")
+        return PlayMedia(download_url, "video/mp4")
 
     async def async_browse_media(
         self,
