@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from homeassistant.components.hikvision.const import DOMAIN
+from homeassistant.components.hikvision.helpers import HikvisionChannel
 from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -58,16 +59,10 @@ def mock_config_entry() -> MockConfigEntry:
 @pytest.fixture
 def mock_hikcamera() -> Generator[MagicMock]:
     """Return a mocked HikCamera."""
-    with (
-        patch(
-            "homeassistant.components.hikvision.HikCamera",
-            autospec=True,
-        ) as hikcamera_mock,
-        patch(
-            "homeassistant.components.hikvision.config_flow.HikCamera",
-            new=hikcamera_mock,
-        ),
-    ):
+    with patch(
+        "homeassistant.components.hikvision.HikCamera",
+        autospec=True,
+    ) as hikcamera_mock:
         camera = hikcamera_mock.return_value
         camera.get_id = TEST_DEVICE_ID
         camera.get_name = TEST_DEVICE_NAME
@@ -76,11 +71,11 @@ def mock_hikcamera() -> Generator[MagicMock]:
             "Motion": [(True, 1)],
             "Line Crossing": [(False, 1)],
         }
-        camera.fetch_attributes.return_value = (
-            False,
-            None,
-            None,
-            "2024-01-01T00:00:00Z",
+        camera.start_stream = MagicMock()
+        camera.disconnect = MagicMock()
+        camera.add_update_callback = MagicMock()
+        camera.fetch_attributes = MagicMock(
+            return_value=(False, None, None, "2024-01-01T00:00:00Z")
         )
         camera.get_event_triggers.return_value = {}
         yield hikcamera_mock
@@ -97,8 +92,74 @@ def mock_hik_nvr(mock_hikcamera: MagicMock) -> MagicMock:
 
 
 @pytest.fixture
+def mock_hikcamera_config_flow() -> Generator[MagicMock]:
+    """Return a mocked HikCamera for config flow."""
+    with patch(
+        "homeassistant.components.hikvision.config_flow.HikCamera",
+    ) as hikcamera_mock:
+        camera = hikcamera_mock.return_value
+        camera.get_id.return_value = TEST_DEVICE_ID
+        camera.get_name = TEST_DEVICE_NAME
+        camera.get_type = "Camera"
+        yield hikcamera_mock
+
+
+@pytest.fixture
+def mock_get_nvr_events() -> Generator[MagicMock]:
+    """Return a mocked get_nvr_events function."""
+    with patch(
+        "homeassistant.components.hikvision.get_nvr_events",
+    ) as mock_get_nvr:
+        # By default, return empty dict (no additional events)
+        mock_get_nvr.return_value = {}
+        yield mock_get_nvr
+
+
+@pytest.fixture
+def mock_inject_events() -> Generator[MagicMock]:
+    """Return a mocked inject_events_into_camera function."""
+    with patch(
+        "homeassistant.components.hikvision.inject_events_into_camera",
+    ) as mock_inject:
+        yield mock_inject
+
+
+@pytest.fixture
+def mock_get_video_channels() -> Generator[MagicMock]:
+    """Return a mocked get_video_channels function."""
+    with patch(
+        "homeassistant.components.hikvision.get_video_channels",
+    ) as mock_get_channels:
+        # By default, return a single channel
+        mock_get_channels.return_value = [
+            HikvisionChannel(id=1, name="Front Camera", enabled=True),
+        ]
+        yield mock_get_channels
+
+
+@pytest.fixture
+def mock_get_video_channels_nvr() -> Generator[MagicMock]:
+    """Return a mocked get_video_channels function for NVR with multiple channels."""
+    with patch(
+        "homeassistant.components.hikvision.get_video_channels",
+    ) as mock_get_channels:
+        mock_get_channels.return_value = [
+            HikvisionChannel(id=1, name="Front Door", enabled=True),
+            HikvisionChannel(id=2, name="Backyard", enabled=True),
+            HikvisionChannel(id=3, name="Garage", enabled=True),
+            HikvisionChannel(id=4, name="Disabled Cam", enabled=False),
+        ]
+        yield mock_get_channels
+
+
+@pytest.fixture
 async def init_integration(
-    hass: HomeAssistant, mock_config_entry: MockConfigEntry, mock_hikcamera: MagicMock
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> MockConfigEntry:
     """Set up the Hikvision integration for testing."""
     await setup_integration(hass, mock_config_entry)

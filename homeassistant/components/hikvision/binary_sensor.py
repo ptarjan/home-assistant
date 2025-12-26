@@ -9,22 +9,18 @@ import voluptuous as vol
 
 from homeassistant.components.binary_sensor import (
     PLATFORM_SCHEMA as BINARY_SENSOR_PLATFORM_SCHEMA,
-    BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import (
     ATTR_LAST_TRIP_TIME,
-    CONF_CUSTOMIZE,
-    CONF_DELAY,
     CONF_HOST,
-    CONF_NAME,
     CONF_PASSWORD,
     CONF_PORT,
     CONF_SSL,
     CONF_USERNAME,
 )
-from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant, callback
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv, issue_registry as ir
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -35,61 +31,21 @@ from homeassistant.helpers.entity_platform import (
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import HikvisionConfigEntry
-from .const import DEFAULT_PORT, DOMAIN
-
-CONF_IGNORED = "ignored"
-
-DEFAULT_DELAY = 0
-DEFAULT_IGNORED = False
-
-# Device class mapping for Hikvision event types
-DEVICE_CLASS_MAP: dict[str, BinarySensorDeviceClass | None] = {
-    "Motion": BinarySensorDeviceClass.MOTION,
-    "Line Crossing": BinarySensorDeviceClass.MOTION,
-    "Field Detection": BinarySensorDeviceClass.MOTION,
-    "Tamper Detection": BinarySensorDeviceClass.MOTION,
-    "Shelter Alarm": None,
-    "Disk Full": None,
-    "Disk Error": None,
-    "Net Interface Broken": BinarySensorDeviceClass.CONNECTIVITY,
-    "IP Conflict": BinarySensorDeviceClass.CONNECTIVITY,
-    "Illegal Access": None,
-    "Video Mismatch": None,
-    "Bad Video": None,
-    "PIR Alarm": BinarySensorDeviceClass.MOTION,
-    "Face Detection": BinarySensorDeviceClass.MOTION,
-    "Scene Change Detection": BinarySensorDeviceClass.MOTION,
-    "I/O": None,
-    "Unattended Baggage": BinarySensorDeviceClass.MOTION,
-    "Attended Baggage": BinarySensorDeviceClass.MOTION,
-    "Recording Failure": None,
-    "Exiting Region": BinarySensorDeviceClass.MOTION,
-    "Entering Region": BinarySensorDeviceClass.MOTION,
-}
+from .const import DEFAULT_PORT, DEVICE_CLASS_MAP, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
-CUSTOMIZE_SCHEMA = vol.Schema(
-    {
-        vol.Optional(CONF_IGNORED, default=DEFAULT_IGNORED): cv.boolean,
-        vol.Optional(CONF_DELAY, default=DEFAULT_DELAY): cv.positive_int,
-    }
-)
-
 PLATFORM_SCHEMA = BINARY_SENSOR_PLATFORM_SCHEMA.extend(
     {
-        vol.Optional(CONF_NAME): cv.string,
         vol.Required(CONF_HOST): cv.string,
         vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
         vol.Optional(CONF_SSL, default=False): cv.boolean,
         vol.Required(CONF_USERNAME): cv.string,
         vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_CUSTOMIZE, default={}): vol.Schema(
-            {cv.string: CUSTOMIZE_SCHEMA}
-        ),
     }
 )
 
+# Coordinator is used to centralize the data updates
 PARALLEL_UPDATES = 0
 
 
@@ -126,8 +82,8 @@ async def async_setup_platform(
 
     ir.async_create_issue(
         hass,
-        HOMEASSISTANT_DOMAIN,
-        f"deprecated_yaml_{DOMAIN}",
+        DOMAIN,
+        "deprecated_yaml",
         is_fixable=False,
         issue_domain=DOMAIN,
         severity=ir.IssueSeverity.WARNING,
@@ -153,15 +109,20 @@ async def async_setup_entry(
         _LOGGER.warning("Hikvision device has no sensors available")
         return
 
-    async_add_entities(
-        HikvisionBinarySensor(
-            entry=entry,
-            sensor_type=sensor_type,
-            channel=channel_info[1],
-        )
-        for sensor_type, channel_list in sensors.items()
-        for channel_info in channel_list
-    )
+    entities: list[HikvisionBinarySensor] = []
+
+    for sensor_type, channel_list in sensors.items():
+        for channel_info in channel_list:
+            channel = channel_info[1]
+            entities.append(
+                HikvisionBinarySensor(
+                    entry=entry,
+                    sensor_type=sensor_type,
+                    channel=channel,
+                )
+            )
+
+    async_add_entities(entities)
 
 
 class HikvisionBinarySensor(BinarySensorEntity):
@@ -177,6 +138,7 @@ class HikvisionBinarySensor(BinarySensorEntity):
         channel: int,
     ) -> None:
         """Initialize the binary sensor."""
+        self._entry = entry
         self._data = entry.runtime_data
         self._camera = self._data.camera
         self._sensor_type = sensor_type
@@ -204,6 +166,7 @@ class HikvisionBinarySensor(BinarySensorEntity):
 
         # Callback ID for pyhik
         self._callback_id = f"{self._data.device_id}.{sensor_type}.{channel}"
+        self._cancel_timer: CALLBACK_TYPE | None = None
 
     def _get_sensor_attributes(self) -> tuple[bool, Any, Any, Any]:
         """Get sensor attributes from camera."""
@@ -226,6 +189,17 @@ class HikvisionBinarySensor(BinarySensorEntity):
 
         # Register callback with pyhik
         self._camera.add_update_callback(self._update_callback, self._callback_id)
+
+        # Register cleanup
+        self.async_on_remove(self._remove_callback)
+
+    @callback
+    def _remove_callback(self) -> None:
+        """Remove the callback from pyhik."""
+        # Cancel any pending timer
+        if self._cancel_timer is not None:
+            self._cancel_timer()
+            self._cancel_timer = None
 
     @callback
     def _update_callback(self, msg: str) -> None:

@@ -2,33 +2,94 @@
 
 from unittest.mock import MagicMock
 
-import requests
-
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_SSL
 from homeassistant.core import HomeAssistant
 
 from . import setup_integration
-from .conftest import TEST_HOST, TEST_PASSWORD, TEST_PORT, TEST_USERNAME
+from .conftest import (
+    TEST_DEVICE_ID,
+    TEST_DEVICE_NAME,
+    TEST_HOST,
+    TEST_PASSWORD,
+    TEST_PORT,
+    TEST_USERNAME,
+)
 
 from tests.common import MockConfigEntry
 
 
-async def test_setup_and_unload_entry(
+async def test_setup_entry(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> None:
-    """Test successful setup and unload of config entry."""
+    """Test successful setup of config entry."""
     await setup_integration(hass, mock_config_entry)
 
     assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.runtime_data is not None
+    assert mock_config_entry.runtime_data.device_id == TEST_DEVICE_ID
+    assert mock_config_entry.runtime_data.device_name == TEST_DEVICE_NAME
     mock_hikcamera.return_value.start_stream.assert_called_once()
 
     # Verify HikCamera was called with the ssl parameter
     mock_hikcamera.assert_called_once_with(
         f"http://{TEST_HOST}", TEST_PORT, TEST_USERNAME, TEST_PASSWORD, False
     )
+
+
+async def test_setup_entry_no_device_id(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
+) -> None:
+    """Test setup fails when device ID is not available."""
+    mock_hikcamera.return_value.get_id = None
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_setup_entry_connection_error(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
+) -> None:
+    """Test setup fails on connection error."""
+    mock_hikcamera.side_effect = Exception("Connection failed")
+
+    mock_config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(mock_config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+
+
+async def test_unload_entry(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
+) -> None:
+    """Test unloading of config entry."""
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
 
     await hass.config_entries.async_unload(mock_config_entry.entry_id)
     await hass.async_block_till_done()
@@ -41,6 +102,9 @@ async def test_setup_entry_with_ssl(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> None:
     """Test setup with ssl enabled passes ssl parameter to HikCamera."""
     mock_config_entry.add_to_hass(hass)
@@ -59,42 +123,47 @@ async def test_setup_entry_with_ssl(
     )
 
 
-async def test_setup_entry_connection_error(
+async def test_setup_entry_default_name(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> None:
-    """Test setup fails on connection error."""
-    mock_hikcamera.side_effect = requests.exceptions.RequestException(
-        "Connection failed"
-    )
+    """Test setup with no device name uses host as name."""
+    mock_hikcamera.return_value.get_name = None
 
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
+    await setup_integration(hass, mock_config_entry)
 
-    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.runtime_data.device_name == TEST_HOST
 
 
-async def test_setup_entry_no_device_id(
+async def test_setup_entry_default_type(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> None:
-    """Test setup fails when device_id is None."""
-    mock_hikcamera.return_value.get_id = None
+    """Test setup with no device type uses Camera as default."""
+    mock_hikcamera.return_value.get_type = None
 
-    mock_config_entry.add_to_hass(hass)
-    await hass.config_entries.async_setup(mock_config_entry.entry_id)
-    await hass.async_block_till_done()
+    await setup_integration(hass, mock_config_entry)
 
-    assert mock_config_entry.state is ConfigEntryState.SETUP_RETRY
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+    assert mock_config_entry.runtime_data.device_type == "Camera"
 
 
 async def test_setup_entry_nvr_fetches_events(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hik_nvr: MagicMock,
+    mock_get_nvr_events: MagicMock,
+    mock_inject_events: MagicMock,
+    mock_get_video_channels: MagicMock,
 ) -> None:
     """Test setup fetches NVR events for NVR devices."""
     await setup_integration(hass, mock_config_entry)

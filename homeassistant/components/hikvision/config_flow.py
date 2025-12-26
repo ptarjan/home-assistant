@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import logging
 from typing import Any
 
 from pyhik.hikvision import HikCamera
-import requests
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import (
     CONF_HOST,
-    CONF_NAME,
     CONF_PASSWORD,
     CONF_PORT,
     CONF_SSL,
@@ -51,7 +50,7 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
                 camera = await self.hass.async_add_executor_job(
                     HikCamera, url, port, username, password, ssl
                 )
-            except requests.exceptions.RequestException:
+            except Exception:
                 _LOGGER.exception("Error connecting to Hikvision device")
                 errors["base"] = "cannot_connect"
             else:
@@ -88,6 +87,63 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
             errors=errors,
         )
 
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Handle reauthorization request."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle reauthorization confirmation."""
+        errors: dict[str, str] = {}
+
+        reauth_entry = self._get_reauth_entry()
+
+        if user_input is not None:
+            host = reauth_entry.data[CONF_HOST]
+            port = reauth_entry.data[CONF_PORT]
+            ssl = reauth_entry.data[CONF_SSL]
+            username = user_input[CONF_USERNAME]
+            password = user_input[CONF_PASSWORD]
+
+            protocol = "https" if ssl else "http"
+            url = f"{protocol}://{host}"
+
+            try:
+                camera = await self.hass.async_add_executor_job(
+                    HikCamera, url, port, username, password
+                )
+                device_id = camera.get_id()
+            except Exception:
+                _LOGGER.exception("Error connecting to Hikvision device")
+                errors["base"] = "cannot_connect"
+            else:
+                if device_id is None:
+                    errors["base"] = "cannot_connect"
+                elif device_id != reauth_entry.unique_id:
+                    errors["base"] = "wrong_device"
+                else:
+                    return self.async_update_reload_and_abort(
+                        reauth_entry,
+                        data_updates={
+                            CONF_USERNAME: username,
+                            CONF_PASSWORD: password,
+                        },
+                    )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(CONF_USERNAME): str,
+                    vol.Required(CONF_PASSWORD): str,
+                }
+            ),
+            errors=errors,
+        )
+
     async def async_step_import(self, import_data: ConfigType) -> ConfigFlowResult:
         """Handle import from configuration.yaml."""
         host = import_data[CONF_HOST]
@@ -95,7 +151,6 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
         username = import_data[CONF_USERNAME]
         password = import_data[CONF_PASSWORD]
         ssl = import_data.get(CONF_SSL, False)
-        name = import_data.get(CONF_NAME)
 
         protocol = "https" if ssl else "http"
         url = f"{protocol}://{host}"
@@ -104,7 +159,7 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
             camera = await self.hass.async_add_executor_job(
                 HikCamera, url, port, username, password, ssl
             )
-        except requests.exceptions.RequestException:
+        except Exception:
             _LOGGER.exception(
                 "Error connecting to Hikvision device during import, aborting"
             )
@@ -123,7 +178,7 @@ class HikvisionConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
         return self.async_create_entry(
-            title=name or device_name or host,
+            title=device_name or host,
             data={
                 CONF_HOST: host,
                 CONF_PORT: port,
