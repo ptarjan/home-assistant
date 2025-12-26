@@ -95,12 +95,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
     )
 
     # For NVRs or devices with no detected events, try to fetch events from ISAPI
+    _LOGGER.debug(
+        "Device type: %s, current_event_states: %s",
+        device_type,
+        camera.current_event_states,
+    )
     if device_type == "NVR" or not camera.current_event_states:
+        # For NVRs, use a broader set of notification methods since events
+        # may be configured with 'record' or other methods instead of 'center'/'HTTP'
+        nvr_notification_methods = {"center", "HTTP", "record", "email", "beep"}
 
         def fetch_and_inject_nvr_events() -> None:
             """Fetch and inject NVR events in a single executor job."""
-            if nvr_events := camera.get_event_triggers(None):
+            nvr_events = camera.get_event_triggers(nvr_notification_methods)
+            _LOGGER.debug("get_event_triggers() returned: %s", nvr_events)
+            if nvr_events:
                 camera.inject_events(nvr_events)
+                _LOGGER.debug(
+                    "After inject_events, current_event_states: %s",
+                    camera.current_event_states,
+                )
 
         await hass.async_add_executor_job(fetch_and_inject_nvr_events)
 

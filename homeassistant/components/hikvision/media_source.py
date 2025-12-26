@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta
+import hashlib
 import logging
+import os
+import re
+import shutil
+import tempfile
+from typing import Any
 from urllib.parse import quote_plus, unquote
 
-from homeassistant.components.camera import DynamicStreamSettings
+import aiofiles
+from aiohttp import web
+
+from homeassistant.components.http import HomeAssistantView
 from homeassistant.components.media_player import MediaClass, MediaType
 from homeassistant.components.media_source import (
     BrowseMediaSource,
@@ -15,7 +25,6 @@ from homeassistant.components.media_source import (
     PlayMedia,
     Unresolvable,
 )
-from homeassistant.components.stream import create_stream
 from homeassistant.core import HomeAssistant
 
 from . import HikvisionConfigEntry
@@ -25,8 +34,216 @@ from .isapi import HikvisionISAPIClient
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_hls_dir(stream_id: str) -> str:
+    """Get the HLS output directory for a stream."""
+    return os.path.join(tempfile.gettempdir(), "hikvision_hls", stream_id)
+
+
+class HikvisionHLSView(HomeAssistantView):
+    """View to stream Hikvision recordings as HLS using ffmpeg subprocess."""
+
+    url = "/api/hikvision/hls/{entry_id}/{stream_id}"
+    name = "api:hikvision:hls"
+    requires_auth = False
+
+    # Class-level state - only one stream at a time due to NVR bandwidth limits
+    _active_ffmpeg: dict[str, Any] = {}
+    _active_stream_id: str | None = None
+    _stderr_task: asyncio.Task[None] | None = None
+
+    async def _serve_segment(self, hls_dir: str, segment: str) -> web.Response:
+        """Serve an HLS segment file."""
+        segment_path = os.path.join(hls_dir, segment)
+        if os.path.exists(segment_path):
+            async with aiofiles.open(segment_path, "rb") as f:
+                data = await f.read()
+            return web.Response(body=data, content_type="video/mp2t")
+        return web.Response(status=404, text="Segment not found")
+
+    def _apply_offset_to_uri(self, rtsp_uri: str, offset_seconds: int) -> str:
+        """Modify RTSP URI to apply time offset."""
+        if offset_seconds <= 0 or "starttime=" not in rtsp_uri:
+            return rtsp_uri
+
+        match = re.search(r"starttime=(\d{8}T\d{6})Z", rtsp_uri)
+        if match:
+            start_str = match.group(1)
+            start_time = datetime.strptime(start_str, "%Y%m%dT%H%M%S")
+            new_start = start_time + timedelta(seconds=offset_seconds)
+            new_start_str = new_start.strftime("%Y%m%dT%H%M%S")
+            rtsp_uri = rtsp_uri.replace(
+                f"starttime={start_str}Z", f"starttime={new_start_str}Z"
+            )
+            _LOGGER.debug(
+                "Seeking to offset %ds: new starttime=%s",
+                offset_seconds,
+                new_start_str,
+            )
+        return rtsp_uri
+
+    async def _cleanup_old_streams(self, current_stream_id: str) -> None:
+        """Kill any existing ffmpeg processes to free bandwidth."""
+        for old_stream_id, proc in list(self._active_ffmpeg.items()):
+            if old_stream_id != current_stream_id and proc.returncode is None:
+                _LOGGER.debug("Killing old ffmpeg stream: %s", old_stream_id)
+                proc.kill()
+                await proc.wait()
+                old_dir = _get_hls_dir(old_stream_id)
+                if os.path.exists(old_dir):
+                    shutil.rmtree(old_dir, ignore_errors=True)
+        self._active_ffmpeg = {
+            k: v for k, v in self._active_ffmpeg.items() if k == current_stream_id
+        }
+
+    async def _start_ffmpeg(
+        self, stream_id: str, rtsp_uri: str, hls_dir: str, playlist_path: str
+    ) -> asyncio.subprocess.Process:
+        """Start ffmpeg process for HLS streaming."""
+        await self._cleanup_old_streams(stream_id)
+
+        if os.path.exists(hls_dir):
+            shutil.rmtree(hls_dir, ignore_errors=True)
+        os.makedirs(hls_dir, exist_ok=True)
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "warning",
+            "-fflags",
+            "+genpts+discardcorrupt",
+            "-use_wallclock_as_timestamps",
+            "1",
+            "-rtsp_transport",
+            "tcp",
+            "-timeout",
+            "10000000",
+            "-i",
+            rtsp_uri,
+            "-an",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-tune",
+            "zerolatency",
+            "-vf",
+            "scale=-2:720",
+            "-b:v",
+            "2M",
+            "-f",
+            "hls",
+            "-hls_time",
+            "2",
+            "-hls_list_size",
+            "0",
+            "-hls_flags",
+            "append_list",
+            playlist_path,
+        ]
+        _LOGGER.debug("Starting ffmpeg for stream %s", stream_id)
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE
+        )
+        self._active_ffmpeg[stream_id] = proc
+        self._active_stream_id = stream_id
+
+        async def log_stderr() -> None:
+            if proc.stderr:
+                stderr = await proc.stderr.read()
+                if stderr:
+                    _LOGGER.debug("Ffmpeg stderr: %s", stderr.decode()[:500])
+
+        self._stderr_task = asyncio.create_task(log_stderr())
+        return proc
+
+    async def _wait_for_playlist(
+        self, stream_id: str, hls_dir: str, playlist_path: str
+    ) -> web.Response | None:
+        """Wait for playlist to be created. Returns error response or None on success."""
+        for _ in range(60):
+            if os.path.exists(playlist_path):
+                try:
+                    segments = [f for f in os.listdir(hls_dir) if f.endswith(".ts")]
+                    if segments:
+                        seg_path = os.path.join(hls_dir, segments[0])
+                        if os.path.getsize(seg_path) > 10000:
+                            _LOGGER.debug(
+                                "Stream %s ready: %d segments", stream_id, len(segments)
+                            )
+                            return None
+                except (OSError, IndexError):
+                    pass
+            await asyncio.sleep(0.5)
+            if stream_id in self._active_ffmpeg:
+                proc = self._active_ffmpeg[stream_id]
+                if proc.returncode is not None and proc.returncode != 0:
+                    _LOGGER.error("Ffmpeg exited with code %s", proc.returncode)
+                    return web.Response(
+                        status=503, text=f"Stream failed (code {proc.returncode})"
+                    )
+        return None
+
+    async def get(
+        self, request: web.Request, entry_id: str, stream_id: str
+    ) -> web.Response:
+        """Handle GET request for HLS playlist or segment."""
+        rtsp_uri = request.query.get("uri", "")
+        segment = request.query.get("segment", "")
+        offset_str = request.query.get("offset", "0")
+
+        if not rtsp_uri and not segment:
+            return web.Response(status=400, text="Missing uri parameter")
+
+        try:
+            offset_seconds = int(offset_str)
+        except ValueError:
+            offset_seconds = 0
+
+        if offset_seconds > 0:
+            stream_id = f"{stream_id}_{offset_seconds}"
+
+        hls_dir = _get_hls_dir(stream_id)
+        os.makedirs(hls_dir, exist_ok=True)
+        playlist_path = os.path.join(hls_dir, "stream.m3u8")
+
+        if segment:
+            return await self._serve_segment(hls_dir, segment)
+
+        rtsp_uri = self._apply_offset_to_uri(unquote(rtsp_uri), offset_seconds)
+
+        need_start = (
+            stream_id not in self._active_ffmpeg
+            or self._active_ffmpeg[stream_id].returncode is not None
+        )
+        if need_start:
+            await self._start_ffmpeg(stream_id, rtsp_uri, hls_dir, playlist_path)
+
+        if error := await self._wait_for_playlist(stream_id, hls_dir, playlist_path):
+            return error
+
+        if not os.path.exists(playlist_path):
+            return web.Response(status=503, text="Waiting for stream...")
+
+        async with aiofiles.open(playlist_path) as f:
+            playlist = await f.read()
+
+        lines = [
+            f"/api/hikvision/hls/{entry_id}/{stream_id}?segment={line}"
+            if line.endswith(".ts")
+            else line
+            for line in playlist.split("\n")
+        ]
+
+        return web.Response(
+            text="\n".join(lines), content_type="application/vnd.apple.mpegurl"
+        )
+
+
 async def async_get_media_source(hass: HomeAssistant) -> HikvisionMediaSource:
     """Set up Hikvision media source."""
+    # Register the custom HLS view that uses ffmpeg subprocess
+    hass.http.register_view(HikvisionHLSView())
     return HikvisionMediaSource(hass)
 
 
@@ -42,23 +259,46 @@ class HikvisionMediaSource(MediaSource):
 
     async def async_resolve_media(self, item: MediaSourceItem) -> PlayMedia:
         """Resolve a media item to a playable URL."""
+        _LOGGER.debug("async_resolve_media called with identifier: %s", item.identifier)
         if item.identifier is None:
             raise Unresolvable("No media item identifier provided")
 
         identifier = item.identifier.split("|")
-        if identifier[0] != "FILE":
-            raise Unresolvable(f"Unknown media item '{item.identifier}'")
+        item_type = identifier[0]
+        offset_seconds = 0
 
-        if len(identifier) < 6:
-            raise Unresolvable(f"Invalid media identifier format: {item.identifier}")
+        # Handle FILE, RECORDING, and TIMESLOT types
+        if item_type in {"FILE", "RECORDING"}:
+            if len(identifier) < 6:
+                raise Unresolvable(
+                    f"Invalid media identifier format: {item.identifier}"
+                )
+            config_entry_id = identifier[1]
+            track_id_str = identifier[2]
+            start_time_str = identifier[3]
+            end_time_str = identifier[4]
+            playback_uri = identifier[5] if len(identifier) > 5 else ""
+        elif item_type == "TIMESLOT":
+            if len(identifier) < 7:
+                raise Unresolvable(
+                    f"Invalid timeslot identifier format: {item.identifier}"
+                )
+            config_entry_id = identifier[1]
+            track_id_str = identifier[2]
+            start_time_str = identifier[3]
+            end_time_str = identifier[4]
+            offset_seconds = int(identifier[5])
+            playback_uri = identifier[6] if len(identifier) > 6 else ""
+        else:
+            raise Unresolvable(f"Unknown media item type '{item_type}'")
 
-        _, config_entry_id, track_id_str, start_time_str, end_time_str, playback_uri = (
-            identifier[0],
-            identifier[1],
-            identifier[2],
-            identifier[3],
-            identifier[4],
-            identifier[5] if len(identifier) > 5 else "",
+        _LOGGER.debug(
+            "Parsed: track=%s, start=%s, end=%s, offset=%ds, uri=%s",
+            track_id_str,
+            start_time_str,
+            end_time_str,
+            offset_seconds,
+            playback_uri[:50] if playback_uri else "none",
         )
 
         entry = self._get_config_entry(config_entry_id)
@@ -69,6 +309,7 @@ class HikvisionMediaSource(MediaSource):
         if playback_uri:
             # Decode the playback URI
             decoded_uri = unquote(playback_uri)
+            _LOGGER.debug("Decoded URI: %s", decoded_uri)
 
             # Add credentials to RTSP URL if needed
             if decoded_uri.startswith("rtsp://") and "@" not in decoded_uri:
@@ -78,25 +319,38 @@ class HikvisionMediaSource(MediaSource):
                     f"rtsp://{camera.usr}:{camera.pwd}@",
                     1,
                 )
+            # Use the main stream URI as-is (sub-stream doesn't have recordings)
             rtsp_url = decoded_uri
         else:
             # Construct RTSP URL from parameters
             camera = entry.runtime_data.camera
             host = camera.root_url.replace("http://", "").replace("https://", "")
+            # Convert channel ID to track ID
+            actual_track_id = int(track_id_str) * 100 + 1
             rtsp_url = (
                 f"rtsp://{camera.usr}:{camera.pwd}@{host}:554/"
-                f"Streaming/tracks/{track_id_str}/"
+                f"Streaming/tracks/{actual_track_id}/"
                 f"?starttime={start_time_str}&endtime={end_time_str}"
             )
 
-        _LOGGER.debug("Creating stream for playback URL: %s", rtsp_url.split("@")[-1])
+        _LOGGER.debug("Using ffmpeg HLS for: %s", rtsp_url.split("@")[-1][:80])
 
-        # Create an HLS stream for playback
-        stream = create_stream(self.hass, rtsp_url, {}, DynamicStreamSettings())
-        stream.add_provider("hls", timeout=3600)
-        stream_url: str = stream.endpoint_url("hls")
+        # Use custom ffmpeg HLS endpoint that handles audio issues
+        # Generate a unique stream ID for this recording (include offset for different seek positions)
+        stream_key = f"{rtsp_url}_{offset_seconds}"
+        stream_id = hashlib.md5(stream_key.encode()).hexdigest()[:12]
 
-        return PlayMedia(stream_url, "application/x-mpegURL")
+        encoded_uri = quote_plus(rtsp_url)
+        hls_url = f"/api/hikvision/hls/{config_entry_id}/{stream_id}?uri={encoded_uri}"
+
+        # Add offset parameter if seeking into the recording
+        if offset_seconds > 0:
+            hls_url += f"&offset={offset_seconds}"
+            _LOGGER.debug("Seeking to offset %ds in recording", offset_seconds)
+
+        _LOGGER.debug("Returning HLS URL: %s", hls_url[:100])
+
+        return PlayMedia(hls_url, "application/x-mpegURL")
 
     async def async_browse_media(
         self,
@@ -125,6 +379,16 @@ class HikvisionMediaSource(MediaSource):
                 int(year),
                 int(month),
                 int(day),
+            )
+
+        if item_type == "RECORDING":
+            _, config_entry_id, track_id, start_str, end_str, encoded_uri = identifier
+            return await self._async_generate_time_slots(
+                config_entry_id,
+                int(track_id),
+                start_str,
+                end_str,
+                encoded_uri,
             )
 
         raise Unresolvable(f"Unknown media item '{item.identifier}'")
@@ -167,9 +431,7 @@ class HikvisionMediaSource(MediaSource):
             children=children,
         )
 
-    async def _async_generate_channels(
-        self, config_entry_id: str
-    ) -> BrowseMediaSource:
+    async def _async_generate_channels(self, config_entry_id: str) -> BrowseMediaSource:
         """Generate the channel list for a device."""
         entry = self._get_config_entry(config_entry_id)
         if entry is None:
@@ -179,6 +441,9 @@ class HikvisionMediaSource(MediaSource):
             HikvisionISAPIClient, entry.runtime_data.camera
         )
         channels = await self.hass.async_add_executor_job(client.get_channels)
+        _LOGGER.debug(
+            "Got channels for %s: %s", entry.runtime_data.device_name, channels
+        )
 
         children: list[BrowseMediaSource] = [
             BrowseMediaSource(
@@ -220,9 +485,20 @@ class HikvisionMediaSource(MediaSource):
         now = datetime.now()
         start_date = now - timedelta(days=30)
 
-        recording_days = await self.hass.async_add_executor_job(
-            client.get_recording_days, track_id, start_date, now
+        # Convert channel ID to track ID (channel 1 = track 101, channel 2 = track 201, etc.)
+        actual_track_id = track_id * 100 + 1
+        _LOGGER.debug(
+            "Searching recording days for channel %s (track %s) from %s to %s",
+            track_id,
+            actual_track_id,
+            start_date,
+            now,
         )
+
+        recording_days = await self.hass.async_add_executor_job(
+            client.get_recording_days, actual_track_id, start_date, now
+        )
+        _LOGGER.debug("Found %s recording days", len(recording_days))
 
         children: list[BrowseMediaSource] = []
         for day in recording_days:
@@ -282,41 +558,68 @@ class HikvisionMediaSource(MediaSource):
         start_time = datetime(year, month, day, 0, 0, 0)
         end_time = datetime(year, month, day, 23, 59, 59)
 
+        # Convert channel ID to track ID (channel 1 = track 101, channel 2 = track 201, etc.)
+        actual_track_id = track_id * 100 + 1
+
         recordings = await self.hass.async_add_executor_job(
-            client.search_recordings, track_id, start_time, end_time
+            client.search_recordings, actual_track_id, start_time, end_time
         )
 
         children: list[BrowseMediaSource] = []
         for recording in recordings:
             # Calculate duration
             duration = recording.end_time - recording.start_time
-            duration_str = str(duration).split(".")[0]  # Remove microseconds
+            duration_seconds = duration.total_seconds()
+            duration_str = str(duration).split(".", maxsplit=1)[
+                0
+            ]  # Remove microseconds
 
             # Format title with time and duration
             time_str = recording.start_time.strftime("%H:%M:%S")
             title = f"{time_str} ({duration_str})"
 
             # Encode the playback URI
-            encoded_uri = quote_plus(recording.playback_uri) if recording.playback_uri else ""
+            encoded_uri = (
+                quote_plus(recording.playback_uri) if recording.playback_uri else ""
+            )
 
             # Create identifier for this recording
             start_str = recording.start_time.strftime("%Y%m%dT%H%M%SZ")
             end_str = recording.end_time.strftime("%Y%m%dT%H%M%SZ")
 
-            children.append(
-                BrowseMediaSource(
-                    domain=DOMAIN,
-                    identifier=(
-                        f"FILE|{config_entry_id}|{track_id}|"
-                        f"{start_str}|{end_str}|{encoded_uri}"
-                    ),
-                    media_class=MediaClass.VIDEO,
-                    media_content_type=MediaType.VIDEO,
-                    title=title,
-                    can_play=True,
-                    can_expand=False,
+            # For recordings > 30 min, make them expandable with time slots
+            # NOT directly playable - user must pick a time slot
+            if duration_seconds > 1800:  # 30 minutes
+                children.append(
+                    BrowseMediaSource(
+                        domain=DOMAIN,
+                        identifier=(
+                            f"RECORDING|{config_entry_id}|{track_id}|"
+                            f"{start_str}|{end_str}|{encoded_uri}"
+                        ),
+                        media_class=MediaClass.DIRECTORY,  # Show as folder
+                        media_content_type=MediaType.PLAYLIST,
+                        title=f"[+] {title}",  # Expandable indicator
+                        can_play=False,  # Must expand to pick time slot
+                        can_expand=True,  # Can expand for time slots
+                    )
                 )
-            )
+            else:
+                # Short recordings play directly
+                children.append(
+                    BrowseMediaSource(
+                        domain=DOMAIN,
+                        identifier=(
+                            f"FILE|{config_entry_id}|{track_id}|"
+                            f"{start_str}|{end_str}|{encoded_uri}"
+                        ),
+                        media_class=MediaClass.VIDEO,
+                        media_content_type=MediaType.VIDEO,
+                        title=title,
+                        can_play=True,
+                        can_expand=False,
+                    )
+                )
 
         date_str = f"{year}-{month:02d}-{day:02d}"
 
@@ -327,6 +630,68 @@ class HikvisionMediaSource(MediaSource):
             media_content_type=MediaType.PLAYLIST,
             title=f"Recordings - {date_str}",
             can_play=False,
+            can_expand=True,
+            children=children,
+        )
+
+    async def _async_generate_time_slots(
+        self,
+        config_entry_id: str,
+        track_id: int,
+        start_str: str,
+        end_str: str,
+        encoded_uri: str,
+    ) -> BrowseMediaSource:
+        """Generate 15-minute time slots for a recording."""
+        # Parse start and end times
+        start_time = datetime.strptime(start_str, "%Y%m%dT%H%M%SZ")
+        end_time = datetime.strptime(end_str, "%Y%m%dT%H%M%SZ")
+        duration = end_time - start_time
+        duration_seconds = int(duration.total_seconds())
+
+        children: list[BrowseMediaSource] = []
+
+        # Generate 5-minute time slots for finer control
+        slot_duration = 300  # 5 minutes in seconds
+        offset = 0
+
+        while offset < duration_seconds:
+            slot_time = start_time + timedelta(seconds=offset)
+            slot_time_str = slot_time.strftime("%H:%M:%S")
+
+            # Calculate remaining time for this slot
+            remaining = duration_seconds - offset
+            slot_len = min(slot_duration, remaining)
+            slot_len_str = f"{slot_len // 60}:{slot_len % 60:02d}"
+
+            children.append(
+                BrowseMediaSource(
+                    domain=DOMAIN,
+                    identifier=(
+                        f"TIMESLOT|{config_entry_id}|{track_id}|"
+                        f"{start_str}|{end_str}|{offset}|{encoded_uri}"
+                    ),
+                    media_class=MediaClass.VIDEO,
+                    media_content_type=MediaType.VIDEO,
+                    title=f"{slot_time_str} ({slot_len_str})",
+                    can_play=True,
+                    can_expand=False,
+                )
+            )
+
+            offset += slot_duration
+
+        recording_title = (
+            f"{start_time.strftime('%H:%M:%S')} - {end_time.strftime('%H:%M:%S')}"
+        )
+
+        return BrowseMediaSource(
+            domain=DOMAIN,
+            identifier=f"RECORDING|{config_entry_id}|{track_id}|{start_str}|{end_str}|{encoded_uri}",
+            media_class=MediaClass.DIRECTORY,
+            media_content_type=MediaType.PLAYLIST,
+            title=f"Recording {recording_title}",
+            can_play=True,
             can_expand=True,
             children=children,
         )

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
@@ -53,7 +53,8 @@ class HikvisionISAPIClient:
 
         """
         self._camera = camera
-        self._base_url = f"{camera.root_url}:{camera.port}"
+        # root_url already includes host:port (e.g., "http://192.168.1.80:80")
+        self._base_url = camera.root_url
         self._auth = HTTPDigestAuth(camera.usr, camera.pwd)
         self._session = requests.Session()
         self._session.auth = self._auth
@@ -68,9 +69,13 @@ class HikvisionISAPIClient:
         """
         channels = []
         try:
-            response = self._session.get(
-                f"{self._base_url}/ISAPI/ContentMgmt/InputProxy/channels",
-                timeout=10,
+            url = f"{self._base_url}/ISAPI/ContentMgmt/InputProxy/channels"
+            _LOGGER.debug("Fetching channels from: %s", url)
+            response = self._session.get(url, timeout=10)
+            _LOGGER.debug(
+                "Response status: %s, content length: %s",
+                response.status_code,
+                len(response.content),
             )
             if response.status_code == 200:
                 root = DefusedET.fromstring(response.content)
@@ -78,14 +83,16 @@ class HikvisionISAPIClient:
                     channel_id = channel.find("ns:id", NS)
                     channel_name = channel.find("ns:name", NS)
                     if channel_id is not None:
-                        channels.append({
-                            "id": channel_id.text,
-                            "name": (
-                                channel_name.text
-                                if channel_name is not None
-                                else f"Channel {channel_id.text}"
-                            ),
-                        })
+                        channels.append(
+                            {
+                                "id": channel_id.text,
+                                "name": (
+                                    channel_name.text
+                                    if channel_name is not None
+                                    else f"Channel {channel_id.text}"
+                                ),
+                            }
+                        )
         except (requests.RequestException, ET.ParseError) as err:
             _LOGGER.debug("Failed to get channels: %s", err)
 
@@ -125,14 +132,16 @@ class HikvisionISAPIClient:
                         cid = channel_id.text
                         if cid and cid.endswith("01") and cid not in seen_channels:
                             seen_channels.add(cid)
-                            channels.append({
-                                "id": cid,
-                                "name": (
-                                    channel_name.text
-                                    if channel_name is not None
-                                    else f"Channel {cid}"
-                                ),
-                            })
+                            channels.append(
+                                {
+                                    "id": cid,
+                                    "name": (
+                                        channel_name.text
+                                        if channel_name is not None
+                                        else f"Channel {cid}"
+                                    ),
+                                }
+                            )
         except (requests.RequestException, ET.ParseError) as err:
             _LOGGER.debug("Failed to get streaming channels: %s", err)
 
@@ -155,59 +164,107 @@ class HikvisionISAPIClient:
             List of RecordingDay objects.
 
         """
-        search_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+        days_with_recordings: dict[str, RecordingDay] = {}
+        url = f"{self._base_url}/ISAPI/ContentMgmt/search"
+
+        # Search in 1-day windows to ensure we get all dates
+        # (NVR pagination seems unreliable, and 7-day windows miss days)
+        window_size = timedelta(days=1)
+        current_start = start_date
+
+        window_num = 0
+        while current_start < end_date:
+            current_end = min(current_start + window_size, end_date)
+            window_num += 1
+
+            try:
+                # Build search XML for this time window
+                search_xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <CMSearchDescription>
-    <searchID>recording-days-search</searchID>
-    <trackList>
-        <trackID>{track_id}</trackID>
-    </trackList>
-    <timeSpanList>
-        <timeSpan>
-            <startTime>{start_date.strftime('%Y-%m-%dT%H:%M:%SZ')}</startTime>
-            <endTime>{end_date.strftime('%Y-%m-%dT%H:%M:%SZ')}</endTime>
-        </timeSpan>
-    </timeSpanList>
-    <maxResults>1000</maxResults>
-    <searchResultPosition>0</searchResultPosition>
-    <metadataList>
-        <metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor>
-    </metadataList>
+<searchID>C8C7B7A6-6B77-0001-842A-6C9D07E87020</searchID>
+<trackIDList>
+<trackID>{track_id}</trackID>
+</trackIDList>
+<timeSpanList>
+<timeSpan>
+<startTime>{current_start.strftime("%Y-%m-%dT%H:%M:%S")}Z</startTime>
+<endTime>{current_end.strftime("%Y-%m-%dT%H:%M:%S")}Z</endTime>
+</timeSpan>
+</timeSpanList>
+<maxResults>500</maxResults>
+<searchResultPosition>0</searchResultPosition>
+<metadataList>
+<metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor>
+</metadataList>
 </CMSearchDescription>"""
 
-        days_with_recordings: dict[str, RecordingDay] = {}
+                response = self._session.post(
+                    url,
+                    data=search_xml,
+                    headers={"Content-Type": "application/xml"},
+                    timeout=30,
+                )
 
-        try:
-            response = self._session.post(
-                f"{self._base_url}/ISAPI/ContentMgmt/search",
-                data=search_xml,
-                headers={"Content-Type": "application/xml"},
-                timeout=30,
-            )
+                if response.status_code != 200:
+                    _LOGGER.debug(
+                        "Window %s (%s to %s): HTTP %s",
+                        window_num,
+                        current_start.date(),
+                        current_end.date(),
+                        response.status_code,
+                    )
+                    current_start = current_end
+                    continue
 
-            if response.status_code == 200:
                 root = DefusedET.fromstring(response.content)
+
+                # Get number of matches
+                num_matches_elem = root.find(".//ns:numOfMatches", NS)
+                num_matches = (
+                    int(num_matches_elem.text)
+                    if num_matches_elem is not None and num_matches_elem.text
+                    else 0
+                )
 
                 for match in root.findall(".//ns:searchMatchItem", NS):
                     time_span = match.find("ns:timeSpan", NS)
-                    if time_span is not None:
-                        start_time = time_span.find("ns:startTime", NS)
-                        if start_time is not None and start_time.text:
-                            rec_date = datetime.fromisoformat(start_time.text)
-                            date_key = rec_date.strftime("%Y-%m-%d")
-                            if date_key not in days_with_recordings:
-                                days_with_recordings[date_key] = RecordingDay(
-                                    date=rec_date.replace(
-                                        hour=0, minute=0, second=0, microsecond=0
-                                    ),
-                                    has_recordings=True,
-                                )
+                    if time_span is None:
+                        continue
+                    start_time_elem = time_span.find("ns:startTime", NS)
+                    if start_time_elem is None or not start_time_elem.text:
+                        continue
+                    # Handle Z suffix and parse datetime
+                    time_str = start_time_elem.text.replace("Z", "+00:00")
+                    try:
+                        rec_date = datetime.fromisoformat(time_str)
+                    except ValueError:
+                        # Try without timezone
+                        time_str = start_time_elem.text.rstrip("Z")
+                        rec_date = datetime.fromisoformat(time_str)
+                    date_key = rec_date.strftime("%Y-%m-%d")
+                    if date_key not in days_with_recordings:
+                        days_with_recordings[date_key] = RecordingDay(
+                            date=rec_date.replace(
+                                hour=0, minute=0, second=0, microsecond=0
+                            ),
+                            has_recordings=True,
+                        )
 
-        except (requests.RequestException, ET.ParseError) as err:
-            _LOGGER.warning("Failed to get recording days: %s", err)
+                _LOGGER.debug(
+                    "Window %s (%s to %s): %s matches, total days=%s",
+                    window_num,
+                    current_start.date(),
+                    current_end.date(),
+                    num_matches,
+                    len(days_with_recordings),
+                )
 
-        return sorted(
-            days_with_recordings.values(), key=lambda x: x.date, reverse=True
-        )
+            except (requests.RequestException, ET.ParseError) as err:
+                _LOGGER.warning("Failed to search window %s: %s", window_num, err)
+
+            current_start = current_end
+
+        return sorted(days_with_recordings.values(), key=lambda x: x.date, reverse=True)
 
     def search_recordings(
         self,
@@ -230,21 +287,21 @@ class HikvisionISAPIClient:
         """
         search_xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <CMSearchDescription>
-    <searchID>recording-search</searchID>
-    <trackList>
-        <trackID>{track_id}</trackID>
-    </trackList>
-    <timeSpanList>
-        <timeSpan>
-            <startTime>{start_time.strftime('%Y-%m-%dT%H:%M:%SZ')}</startTime>
-            <endTime>{end_time.strftime('%Y-%m-%dT%H:%M:%SZ')}</endTime>
-        </timeSpan>
-    </timeSpanList>
-    <maxResults>{max_results}</maxResults>
-    <searchResultPosition>0</searchResultPosition>
-    <metadataList>
-        <metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor>
-    </metadataList>
+<searchID>C8C7B7A6-6B77-0001-842A-6C9D07E87021</searchID>
+<trackIDList>
+<trackID>{track_id}</trackID>
+</trackIDList>
+<timeSpanList>
+<timeSpan>
+<startTime>{start_time.strftime("%Y-%m-%dT%H:%M:%S")}Z</startTime>
+<endTime>{end_time.strftime("%Y-%m-%dT%H:%M:%S")}Z</endTime>
+</timeSpan>
+</timeSpanList>
+<maxResults>{max_results}</maxResults>
+<searchResultPosition>0</searchResultPosition>
+<metadataList>
+<metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor>
+</metadataList>
 </CMSearchDescription>"""
 
         recordings: list[Recording] = []
