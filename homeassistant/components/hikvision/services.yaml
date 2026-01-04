@@ -1,0 +1,47 @@
+reboot:
+  name: Reboot device
+  description: Reboot the Hikvision device.
+  fields:
+    config_entry_id:
+      name: Device
+      description: The Hikvision device to reboot.
+      required: true
+      selector:
+        config_entry:
+          integration: hikvision
+
+isapi_request:
+  name: ISAPI request
+  description: Send a custom ISAPI request to the Hikvision device.
+  fields:
+    config_entry_id:
+      name: Device
+      description: The Hikvision device to send the request to.
+      required: true
+      selector:
+        config_entry:
+          integration: hikvision
+    method:
+      name: Method
+      description: The HTTP method to use.
+      required: true
+      selector:
+        select:
+          options:
+            - "GET"
+            - "PUT"
+            - "POST"
+    endpoint:
+      name: Endpoint
+      description: The ISAPI endpoint path (e.g., /ISAPI/System/deviceInfo).
+      required: true
+      example: "/ISAPI/System/deviceInfo"
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: Optional XML payload for PUT/POST requests.
+      required: false
+      selector:
+        text:
+          multiline: true

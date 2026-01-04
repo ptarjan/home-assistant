@@ -2,10 +2,12 @@
   "config": {
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]",
-      "unknown": "[%key:common::config_flow::error::unknown%]"
+      "unknown": "[%key:common::config_flow::error::unknown%]",
+      "wrong_device": "This device has a different serial number than the original device"
     },
     "error": {
       "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
+      "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
       "unknown": "[%key:common::config_flow::error::unknown%]"
     },
     "step": {
@@ -26,12 +28,122 @@
         },
         "description": "Enter your Hikvision device connection details.",
         "title": "Set up Hikvision device"
+      },
+      "reauth_confirm": {
+        "data": {
+          "password": "[%key:common::config_flow::data::password%]",
+          "username": "[%key:common::config_flow::data::username%]"
+        },
+        "description": "Please update your credentials for {host}.",
+        "title": "Reauthenticate Hikvision device"
+      },
+      "reconfigure_confirm": {
+        "data": {
+          "host": "[%key:common::config_flow::data::host%]",
+          "password": "[%key:common::config_flow::data::password%]",
+          "port": "[%key:common::config_flow::data::port%]",
+          "ssl": "Use SSL",
+          "username": "[%key:common::config_flow::data::username%]"
+        },
+        "description": "Update your Hikvision device connection details.",
+        "title": "Reconfigure Hikvision device"
       }
     }
   },
   "device": {
     "nvr_channel": {
       "name": "{device_name} channel {channel_number}"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "rtsp_port": "RTSP port"
+        },
+        "data_description": {
+          "rtsp_port": "The RTSP port for video streaming (default is 554)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "storage_status": {
+        "name": "{storage_name} status"
+      },
+      "storage_capacity": {
+        "name": "{storage_name} capacity"
+      },
+      "storage_free_space": {
+        "name": "{storage_name} free space"
+      },
+      "alarm_server_protocol": {
+        "name": "Alarm server protocol"
+      },
+      "alarm_server_address": {
+        "name": "Alarm server address"
+      },
+      "alarm_server_port": {
+        "name": "Alarm server port"
+      },
+      "alarm_server_path": {
+        "name": "Alarm server path"
+      }
+    },
+    "switch": {
+      "event_detection": {
+        "name": "{event_type} {channel}"
+      },
+      "output_port": {
+        "name": "{port_name}"
+      },
+      "holiday_mode": {
+        "name": "Holiday mode"
+      }
+    },
+    "camera": {
+      "sub_stream": {
+        "name": "{camera_name} stream {stream_number}"
+      }
+    },
+    "image": {
+      "snapshot": {
+        "name": "{camera_name} snapshot"
+      }
+    }
+  },
+  "services": {
+    "reboot": {
+      "name": "Reboot device",
+      "description": "Reboot the Hikvision device."
+    },
+    "isapi_request": {
+      "name": "ISAPI request",
+      "description": "Send a custom ISAPI request to the Hikvision device."
+    }
+  },
+  "exceptions": {
+    "config_entry_not_found": {
+      "message": "Configuration entry not found: {entry_id}"
+    },
+    "config_entry_not_loaded": {
+      "message": "Configuration entry is not loaded: {entry_id}"
+    },
+    "reboot_permission_denied": {
+      "message": "Permission denied: The user does not have reboot permissions on the device"
+    },
+    "reboot_failed": {
+      "message": "Failed to reboot device: {error}"
+    },
+    "isapi_permission_denied": {
+      "message": "Permission denied: The user does not have sufficient permissions for this ISAPI request"
+    },
+    "isapi_request_failed": {
+      "message": "ISAPI request failed: {error}"
+    },
+    "connection_failed": {
+      "message": "Failed to connect to the device"
     }
   },
   "issues": {

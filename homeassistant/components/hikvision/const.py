@@ -1,6 +1,12 @@
 """Constants for the Hikvision integration."""
 
-DOMAIN = "hikvision"
+from typing import Final
+
+DOMAIN: Final = "hikvision"
 
 # Default values
-DEFAULT_PORT = 80
+DEFAULT_PORT: Final = 80
+DEFAULT_RTSP_PORT: Final = 554
+
+# Configuration keys
+CONF_RTSP_PORT: Final = "rtsp_port"
