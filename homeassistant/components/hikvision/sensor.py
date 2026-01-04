@@ -164,6 +164,14 @@ class HikvisionStorageSensor(
             f"{entry.runtime_data.device_id}_storage_{storage_id}_{description.key}"
         )
         self._attr_translation_placeholders = {"storage_name": storage_name}
+        # Set explicit name since device_class may override translation
+        name_map = {
+            "status": f"{storage_name} status",
+            "capacity": f"{storage_name} capacity",
+            "free_space": f"{storage_name} free space",
+        }
+        if description.key in name_map:
+            self._attr_name = name_map[description.key]
 
     @property
     def _storage(self) -> Any | None:

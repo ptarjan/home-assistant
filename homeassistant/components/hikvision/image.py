@@ -69,8 +69,7 @@ class HikvisionSnapshot(
 
         self._camera_id = camera_id
         self._attr_unique_id = f"{entry.runtime_data.device_id}_snapshot_{camera_id}"
-        self._attr_translation_key = "snapshot"
-        self._attr_translation_placeholders = {"camera_name": camera_name}
+        self._attr_name = f"{camera_name} snapshot"
         self._cached_image: bytes | None = None
 
     async def async_image(self) -> bytes | None:

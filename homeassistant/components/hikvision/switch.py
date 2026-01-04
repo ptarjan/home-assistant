@@ -108,15 +108,11 @@ class HikvisionEventSwitch(
         self._event_type = event_type
         self._channel = channel
         self._attr_unique_id = f"{entry.runtime_data.device_id}_event_{event_id}"
-        self._attr_translation_key = "event_detection"
 
         # Set name based on event type and channel
         event_name = EVENT_TYPE_NAMES.get(event_type, event_type)
-        if len(coordinator.data.cameras) > 1:
-            self._attr_translation_placeholders = {
-                "event_type": event_name,
-                "channel": str(channel),
-            }
+        if coordinator.data and len(coordinator.data.cameras) > 1:
+            self._attr_name = f"{event_name} {channel}"
         else:
             self._attr_name = event_name
 
@@ -169,8 +165,7 @@ class HikvisionOutputSwitch(
         super().__init__(coordinator, entry)
         self._port_id = port_id
         self._attr_unique_id = f"{entry.runtime_data.device_id}_output_{port_id}"
-        self._attr_translation_key = "output_port"
-        self._attr_translation_placeholders = {"port_name": port_name}
+        self._attr_name = port_name
 
     @property
     def is_on(self) -> bool:
@@ -204,8 +199,8 @@ class HikvisionHolidayModeSwitch(
     """Representation of a Hikvision holiday mode switch."""
 
     _attr_entity_category = EntityCategory.CONFIG
-    _attr_translation_key = "holiday_mode"
     _attr_icon = "mdi:palm-tree"
+    _attr_name = "Holiday mode"
 
     def __init__(
         self,

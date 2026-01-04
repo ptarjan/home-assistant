@@ -20,6 +20,7 @@ ENDPOINT_DEVICE_INFO = "/ISAPI/System/deviceInfo"
 ENDPOINT_CAPABILITIES = "/ISAPI/System/capabilities"
 ENDPOINT_STORAGE = "/ISAPI/ContentMgmt/Storage"
 ENDPOINT_STREAMING_CHANNELS = "/ISAPI/Streaming/channels"
+ENDPOINT_INPUT_PROXY_CHANNELS = "/ISAPI/ContentMgmt/InputProxy/channels"
 ENDPOINT_IO_INPUTS = "/ISAPI/System/IO/inputs"
 ENDPOINT_IO_OUTPUTS = "/ISAPI/System/IO/outputs"
 ENDPOINT_EVENT_NOTIFICATION = "/ISAPI/Event/notification/httpHosts"
@@ -346,10 +347,10 @@ class ISAPIClient:
             return []
 
         devices = []
-        storage_list = response.get("storage", {})
+        storage_list = response.get("storage") or {}
 
         # Handle HDD list
-        hdd_list = storage_list.get("hddList", {}).get("hdd", [])
+        hdd_list = (storage_list.get("hddList") or {}).get("hdd", [])
         if isinstance(hdd_list, dict):
             hdd_list = [hdd_list]
 
@@ -366,7 +367,7 @@ class ISAPIClient:
         )
 
         # Handle NAS list
-        nas_list = storage_list.get("nasList", {}).get("nas", [])
+        nas_list = (storage_list.get("nasList") or {}).get("nas", [])
         if isinstance(nas_list, dict):
             nas_list = [nas_list]
 
@@ -386,11 +387,15 @@ class ISAPIClient:
         return devices
 
     def _parse_capacity(self, value: str | None) -> int | None:
-        """Parse capacity value to bytes."""
+        """Parse capacity value to bytes.
+
+        Hikvision returns storage values in MB, convert to bytes.
+        """
         if value is None:
             return None
         try:
-            return int(value)
+            # Hikvision returns capacity in MB, convert to bytes
+            return int(value) * 1024 * 1024
         except (ValueError, TypeError):
             return None
 
@@ -421,37 +426,82 @@ class ISAPIClient:
 
     async def get_streaming_channels(self) -> list[StreamInfo]:
         """Get streaming channel information."""
+        # Try standard streaming channels endpoint first
         try:
             response = await self.request(HTTPMethod.GET, ENDPOINT_STREAMING_CHANNELS)
-        except ISAPINotFoundError:
-            return []
-
-        channels = response.get("StreamingChannelList", {}).get("StreamingChannel", [])
-        if isinstance(channels, dict):
-            channels = [channels]
-
-        streams = []
-        for channel in channels:
-            channel_id = channel.get("id", "")
-            # Format: 101, 102, 201, 202 where first digit is camera, second is stream
-            try:
-                full_id = int(channel_id)
-                cam_id = full_id // 100
-                stream_type = full_id % 100
-            except (ValueError, TypeError):
-                continue
-
-            streams.append(
-                StreamInfo(
-                    id=channel_id,
-                    channel_id=cam_id,
-                    type_id=stream_type,
-                    name=channel.get("channelName", f"Channel {cam_id}"),
-                    enabled=channel.get("enabled", "true").lower() == "true",
-                )
+            channels = response.get("StreamingChannelList", {}).get(
+                "StreamingChannel", []
             )
+            if isinstance(channels, dict):
+                channels = [channels]
 
-        return streams
+            streams = []
+            for channel in channels:
+                channel_id = channel.get("id", "")
+                # Format: 101, 102, 201, 202 where first digit is camera, second is stream
+                try:
+                    full_id = int(channel_id)
+                    cam_id = full_id // 100
+                    stream_type = full_id % 100
+                except (ValueError, TypeError):
+                    continue
+
+                streams.append(
+                    StreamInfo(
+                        id=channel_id,
+                        channel_id=cam_id,
+                        type_id=stream_type,
+                        name=channel.get("channelName", f"Channel {cam_id}"),
+                        enabled=channel.get("enabled", "true").lower() == "true",
+                    )
+                )
+
+            if streams:
+                return streams
+        except (ISAPINotFoundError, ISAPIError):
+            pass
+
+        # Try NVR input proxy channels endpoint (for NVRs)
+        try:
+            response = await self.request(HTTPMethod.GET, ENDPOINT_INPUT_PROXY_CHANNELS)
+            channels = response.get("InputProxyChannelList", {}).get(
+                "InputProxyChannel", []
+            )
+            if isinstance(channels, dict):
+                channels = [channels]
+
+            streams = []
+            for channel in channels:
+                try:
+                    channel_id = int(channel.get("id", 0))
+                except (ValueError, TypeError):
+                    continue
+
+                channel_name = channel.get("name", f"Channel {channel_id}")
+                # Create main stream (type 1) for each NVR channel
+                streams.append(
+                    StreamInfo(
+                        id=f"{channel_id}01",
+                        channel_id=channel_id,
+                        type_id=1,
+                        name=channel_name,
+                        enabled=True,
+                    )
+                )
+                # Create sub stream (type 2) for each NVR channel
+                streams.append(
+                    StreamInfo(
+                        id=f"{channel_id}02",
+                        channel_id=channel_id,
+                        type_id=2,
+                        name=channel_name,
+                        enabled=True,
+                    )
+                )
+
+            return streams
+        except (ISAPINotFoundError, ISAPIError):
+            return []
 
     async def get_cameras(self) -> list[CameraInfo]:
         """Get camera information with streams."""
@@ -520,7 +570,13 @@ class ISAPIClient:
             holidays = response.get("HolidayList", {}).get("holiday", [])
             if isinstance(holidays, dict):
                 holidays = [holidays]
-            return any(h.get("enabled", "false").lower() == "true" for h in holidays)
+            for h in holidays:
+                enabled = h.get("enabled", "false")
+                if isinstance(enabled, dict):
+                    enabled = enabled.get("#text", "false")
+                if str(enabled).lower() == "true":
+                    return True
+            return False
         except ISAPIError:
             return False
 
