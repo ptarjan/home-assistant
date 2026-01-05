@@ -498,10 +498,10 @@ class ISAPIClient:
                         enabled=True,
                     )
                 )
-
-            return streams
         except (ISAPINotFoundError, ISAPIError):
             return []
+        else:
+            return streams
 
     async def get_cameras(self) -> list[CameraInfo]:
         """Get camera information with streams."""
@@ -576,8 +576,9 @@ class ISAPIClient:
                     enabled = enabled.get("#text", "false")
                 if str(enabled).lower() == "true":
                     return True
-            return False
         except ISAPIError:
+            return False
+        else:
             return False
 
     async def set_holiday_mode_enabled(self, enabled: bool) -> None:
