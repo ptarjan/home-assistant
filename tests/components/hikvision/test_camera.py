@@ -1,8 +1,7 @@
 """Tests for the Hikvision camera platform."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import httpx
 import pytest
 
 # Camera tests require numpy for the stream component
@@ -30,9 +29,6 @@ async def test_camera_setup_single_channel(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     platforms: list[Platform],
 ) -> None:
     """Test camera setup with a single channel."""
@@ -48,28 +44,22 @@ async def test_camera_setup_single_channel(
 async def test_camera_setup_nvr_multiple_channels(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels_nvr: MagicMock,
+    mock_hik_nvr: MagicMock,
     platforms: list[Platform],
 ) -> None:
     """Test camera setup with NVR and multiple channels."""
-    # Set device type to NVR
-    mock_hikcamera.return_value.get_type = "NVR"
-
     await setup_integration(hass, mock_config_entry, platforms)
 
     assert mock_config_entry.state is ConfigEntryState.LOADED
 
-    # Verify camera entities were created for enabled channels only
+    # Verify camera entities were created for all channels
     entity_registry = er.async_get(hass)
     entities = er.async_entries_for_config_entry(
         entity_registry, mock_config_entry.entry_id
     )
     camera_entities = [e for e in entities if e.domain == "camera"]
 
-    # Should have 3 cameras (channel 4 is disabled)
+    # Should have 3 cameras (get_channels returns [1, 2, 3] for NVR)
     assert len(camera_entities) == 3
 
 
@@ -77,9 +67,6 @@ async def test_camera_stream_source(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     platforms: list[Platform],
 ) -> None:
     """Test camera stream source URL."""
@@ -95,86 +82,62 @@ async def test_camera_stream_source(
     camera = camera_component.get_entity(entity_id)
     assert camera is not None
 
-    # Verify stream source
+    # Verify stream source uses pyHik's get_stream_url
     stream_source = await camera.stream_source()
     assert stream_source is not None
-    assert f"rtsp://{TEST_USERNAME}:{TEST_PASSWORD}@{TEST_HOST}:554" in stream_source
-    assert "/Streaming/Channels/101" in stream_source
+    # pyHik returns RTSP URL with credentials
+    assert "rtsp://" in stream_source
+    assert TEST_USERNAME in stream_source
+    assert TEST_PASSWORD in stream_source
 
 
 async def test_camera_snapshot(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     platforms: list[Platform],
 ) -> None:
-    """Test camera snapshot fetching."""
+    """Test camera snapshot fetching via pyHik."""
     await setup_integration(hass, mock_config_entry, platforms)
 
     entity_id = "camera.front_camera"
     camera_component = hass.data["camera"]
     camera = camera_component.get_entity(entity_id)
 
-    # Mock the httpx client
-    mock_image = b"fake_image_data"
-    with patch(
-        "homeassistant.components.hikvision.camera.get_async_client"
-    ) as mock_client:
-        mock_response = MagicMock()
-        mock_response.content = mock_image
-        mock_response.raise_for_status = MagicMock()
-        mock_client.return_value.get = MagicMock(return_value=mock_response)
-
-        # Make it awaitable
-        async def mock_get(*args, **kwargs):
-            return mock_response
-
-        mock_client.return_value.get = mock_get
-
-        image = await camera.async_camera_image()
-        assert image == mock_image
+    # The mock_hikcamera already has get_snapshot returning fake image data
+    image = await camera.async_camera_image()
+    assert image is not None
+    # Verify it's the PNG header we set in the mock
+    assert image.startswith(b"\x89PNG\r\n\x1a\n")
 
 
-async def test_camera_snapshot_timeout(
+async def test_camera_snapshot_error(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     platforms: list[Platform],
 ) -> None:
-    """Test camera snapshot timeout handling."""
+    """Test camera snapshot error handling."""
+    # Configure the mock to raise an exception
+    mock_hikcamera.return_value.get_snapshot = MagicMock(
+        side_effect=Exception("Connection failed")
+    )
+
     await setup_integration(hass, mock_config_entry, platforms)
 
     entity_id = "camera.front_camera"
     camera_component = hass.data["camera"]
     camera = camera_component.get_entity(entity_id)
 
-    with patch(
-        "homeassistant.components.hikvision.camera.get_async_client"
-    ) as mock_client:
-
-        async def mock_get(*args, **kwargs):
-            raise httpx.TimeoutException("Timeout")
-
-        mock_client.return_value.get = mock_get
-
-        # Should return None (last_image) on timeout
-        image = await camera.async_camera_image()
-        assert image is None
+    # Should return None on error
+    image = await camera.async_camera_image()
+    assert image is None
 
 
 async def test_camera_extra_attributes(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     platforms: list[Platform],
 ) -> None:
     """Test camera extra state attributes."""
@@ -185,23 +148,20 @@ async def test_camera_extra_attributes(
 
     assert state is not None
     assert state.attributes.get("channel_id") == 1
-    assert state.attributes.get("channel_name") == "Front Camera"
+    assert state.attributes.get("channel_name") == "Channel 1"
 
 
 async def test_camera_no_channels(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
     platforms: list[Platform],
 ) -> None:
     """Test camera setup when no channels are found."""
-    with patch(
-        "homeassistant.components.hikvision.get_video_channels",
-        return_value=[],
-    ):
-        await setup_integration(hass, mock_config_entry, platforms)
+    # Configure the mock to return no channels
+    mock_hikcamera.return_value.get_channels = MagicMock(return_value=[])
+
+    await setup_integration(hass, mock_config_entry, platforms)
 
     assert mock_config_entry.state is ConfigEntryState.LOADED
 
@@ -218,9 +178,6 @@ async def test_camera_unique_id(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
     entity_registry: er.EntityRegistry,
     platforms: list[Platform],
 ) -> None:
@@ -239,16 +196,11 @@ async def test_camera_unique_id(
 async def test_camera_nvr_naming(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels_nvr: MagicMock,
+    mock_hik_nvr: MagicMock,
     entity_registry: er.EntityRegistry,
     platforms: list[Platform],
 ) -> None:
     """Test camera naming for NVR with multiple channels."""
-    mock_hikcamera.return_value.get_type = "NVR"
-
     await setup_integration(hass, mock_config_entry, platforms)
 
     # Get camera entities
@@ -259,6 +211,6 @@ async def test_camera_nvr_naming(
 
     # Verify names include channel names
     names = {e.original_name for e in camera_entities}
-    assert "Front Door" in names
-    assert "Backyard" in names
-    assert "Garage" in names
+    assert "Channel 1" in names
+    assert "Channel 2" in names
+    assert "Channel 3" in names

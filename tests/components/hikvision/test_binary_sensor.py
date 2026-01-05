@@ -39,9 +39,9 @@ async def test_binary_sensors_created(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test binary sensors are created for each event type."""
     await setup_integration(hass, mock_config_entry)
@@ -63,9 +63,9 @@ async def test_binary_sensor_unique_id(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
     entity_registry: er.EntityRegistry,
 ) -> None:
     """Test binary sensors have correct unique IDs."""
@@ -80,9 +80,9 @@ async def test_binary_sensor_device_info(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
     device_registry: dr.DeviceRegistry,
 ) -> None:
     """Test binary sensors are linked to device."""
@@ -101,9 +101,9 @@ async def test_binary_sensor_attributes(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test binary sensor extra state attributes."""
     await setup_integration(hass, mock_config_entry)
@@ -118,9 +118,9 @@ async def test_binary_sensor_callback_registered(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test that callback is registered with pyhik."""
     await setup_integration(hass, mock_config_entry)
@@ -133,9 +133,9 @@ async def test_binary_sensor_no_sensors(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test setup when device has no sensors."""
     mock_hikcamera.return_value.current_event_states = None
@@ -151,9 +151,9 @@ async def test_binary_sensor_nvr_device(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test binary sensor naming for NVR devices."""
     mock_hikcamera.return_value.get_type = "NVR"
@@ -175,9 +175,9 @@ async def test_binary_sensor_state_on(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test binary sensor state when on."""
     mock_hikcamera.return_value.fetch_attributes.return_value = (
@@ -198,9 +198,9 @@ async def test_binary_sensor_device_class_unknown(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test binary sensor with unknown device class."""
     mock_hikcamera.return_value.current_event_states = {
@@ -217,9 +217,9 @@ async def test_binary_sensor_device_class_unknown(
 async def test_yaml_import_creates_deprecation_issue(
     hass: HomeAssistant,
     mock_hikcamera: MagicMock,
-    mock_get_nvr_events: MagicMock,
-    mock_inject_events: MagicMock,
-    mock_get_video_channels: MagicMock,
+    
+    
+    
 ) -> None:
     """Test YAML import creates deprecation issue."""
     with patch(

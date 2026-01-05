@@ -5,33 +5,17 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import httpx
-
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.components.stream import CONF_RTSP_TRANSPORT, RTSP_TRANSPORTS
-from homeassistant.const import (
-    CONF_HOST,
-    CONF_PASSWORD,
-    CONF_PORT,
-    CONF_SSL,
-    CONF_USERNAME,
-)
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.httpx_client import get_async_client
 
 from . import HikvisionConfigEntry
-from .const import CONF_RTSP_PORT, DEFAULT_RTSP_PORT, DOMAIN
-from .helpers import HikvisionChannel, build_rtsp_url, build_snapshot_url
+from .const import DOMAIN
+from .helpers import HikvisionChannel
 
 _LOGGER = logging.getLogger(__name__)
-
-# Timeout for fetching snapshot images
-GET_IMAGE_TIMEOUT = 10
-
-# Use sub-stream (lower resolution) for snapshots to reduce load
-SNAPSHOT_STREAM_TYPE = 1
 
 
 async def async_setup_entry(
@@ -98,85 +82,32 @@ class HikvisionCamera(Camera):
         # Track error state to avoid log spam
         self._snapshot_error_logged: bool = False
 
-    @property
-    def _host(self) -> str:
-        """Return the device host."""
-        return self._entry.data[CONF_HOST]
-
-    @property
-    def _port(self) -> int:
-        """Return the HTTP port."""
-        return self._entry.data[CONF_PORT]
-
-    @property
-    def _rtsp_port(self) -> int:
-        """Return the RTSP port."""
-        return self._entry.data.get(CONF_RTSP_PORT, DEFAULT_RTSP_PORT)
-
-    @property
-    def _username(self) -> str:
-        """Return the username."""
-        return self._entry.data[CONF_USERNAME]
-
-    @property
-    def _password(self) -> str:
-        """Return the password."""
-        return self._entry.data[CONF_PASSWORD]
-
-    @property
-    def _ssl(self) -> bool:
-        """Return whether SSL is enabled."""
-        return self._entry.data[CONF_SSL]
-
     async def stream_source(self) -> str | None:
         """Return the source of the stream."""
-        return build_rtsp_url(
-            host=self._host,
-            port=self._rtsp_port,
-            username=self._username,
-            password=self._password,
-            channel=self._channel.id,
-            stream_type=1,  # Main stream for live view
+        # Use pyHik's get_stream_url method
+        camera = self._data.camera
+        return await self.hass.async_add_executor_job(
+            camera.get_stream_url, self._channel.id, "rtsp", 1
         )
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return a still image from the camera."""
-        snapshot_url = build_snapshot_url(
-            host=self._host,
-            port=self._port,
-            channel=self._channel.id,
-            ssl=self._ssl,
-            stream_type=SNAPSHOT_STREAM_TYPE,
-        )
+        camera = self._data.camera
 
         try:
-            async_client = get_async_client(self.hass, verify_ssl=False)
-            response = await async_client.get(
-                snapshot_url,
-                auth=httpx.DigestAuth(self._username, self._password),
-                timeout=GET_IMAGE_TIMEOUT,
+            # Use pyHik's get_snapshot method (blocking, needs executor)
+            image = await self.hass.async_add_executor_job(
+                camera.get_snapshot, self._channel.id
             )
-            response.raise_for_status()
-            self._last_image = response.content
-            # Log recovery if we previously had errors
-            if self._snapshot_error_logged:
-                _LOGGER.info("Snapshot recovered for %s", self._channel.name)
-                self._snapshot_error_logged = False
-        except httpx.TimeoutException:
-            if not self._snapshot_error_logged:
-                _LOGGER.warning("Timeout getting snapshot from %s", self._channel.name)
-                self._snapshot_error_logged = True
-        except httpx.HTTPStatusError as err:
-            if not self._snapshot_error_logged:
-                _LOGGER.warning(
-                    "HTTP error getting snapshot from %s: %s",
-                    self._channel.name,
-                    err.response.status_code,
-                )
-                self._snapshot_error_logged = True
-        except httpx.RequestError as err:
+            if image:
+                self._last_image = image
+                # Log recovery if we previously had errors
+                if self._snapshot_error_logged:
+                    _LOGGER.info("Snapshot recovered for %s", self._channel.name)
+                    self._snapshot_error_logged = False
+        except Exception as err:  # noqa: BLE001
             if not self._snapshot_error_logged:
                 _LOGGER.warning(
                     "Error getting snapshot from %s: %s", self._channel.name, err

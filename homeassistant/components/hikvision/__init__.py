@@ -18,7 +18,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 
-from .helpers import HikvisionChannel, get_video_channels
+from .helpers import HikvisionChannel
 
 PLATFORMS = [Platform.BINARY_SENSOR, Platform.CAMERA]
 
@@ -62,10 +62,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
     device_name = camera.get_name or host
     device_type = camera.get_type or "Camera"
 
-    # Discover video channels for camera entities
-    channels = await hass.async_add_executor_job(
-        get_video_channels, host, port, username, password, ssl
-    )
+    # Discover video channels for camera entities using pyHik
+    channel_ids = await hass.async_add_executor_job(camera.get_channels)
+    channels = [
+        HikvisionChannel(id=ch_id, name=f"Channel {ch_id}", enabled=True)
+        for ch_id in channel_ids
+    ]
 
     entry.runtime_data = HikvisionData(
         camera=camera,

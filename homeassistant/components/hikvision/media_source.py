@@ -31,7 +31,6 @@ from homeassistant.core import HomeAssistant
 
 from . import HikvisionConfigEntry
 from .const import DOMAIN
-from .isapi import HikvisionISAPIClient
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,11 +102,11 @@ class HikvisionHLSView(HomeAssistantView):
             )
         await loop.run_in_executor(None, lambda: os.makedirs(hls_dir, exist_ok=True))
 
-        # Get credentials for HTTP download
-        client = HikvisionISAPIClient(entry.runtime_data.camera)
-        base_url = client.base_url
-        username = client.username
-        password = client.password
+        # Get credentials for HTTP download from camera
+        camera = entry.runtime_data.camera
+        base_url = camera.root_url
+        username = camera.usr
+        password = camera.pwd
 
         download_xml = f"""<?xml version="1.0" encoding="utf-8"?>
 <downloadRequest>
@@ -489,22 +488,21 @@ class HikvisionMediaSource(MediaSource):
         if entry is None:
             raise Unresolvable(f"Config entry {config_entry_id} not found")
 
-        client = await self.hass.async_add_executor_job(
-            HikvisionISAPIClient, entry.runtime_data.camera
-        )
-        channels = await self.hass.async_add_executor_job(client.get_channels)
+        camera = entry.runtime_data.camera
+        channels = await self.hass.async_add_executor_job(camera.get_channels)
 
+        # get_channels() returns a list of channel numbers, build display names
         children: list[BrowseMediaSource] = [
             BrowseMediaSource(
                 domain=DOMAIN,
-                identifier=f"CHANNEL|{config_entry_id}|{channel['id']}",
+                identifier=f"CHANNEL|{config_entry_id}|{channel_id}",
                 media_class=MediaClass.CHANNEL,
                 media_content_type=MediaType.PLAYLIST,
-                title=channel["name"],
+                title=f"Channel {channel_id}",
                 can_play=False,
                 can_expand=True,
             )
-            for channel in channels
+            for channel_id in channels
         ]
 
         return BrowseMediaSource(
@@ -526,9 +524,7 @@ class HikvisionMediaSource(MediaSource):
         if entry is None:
             raise Unresolvable(f"Config entry {config_entry_id} not found")
 
-        client = await self.hass.async_add_executor_job(
-            HikvisionISAPIClient, entry.runtime_data.camera
-        )
+        camera = entry.runtime_data.camera
 
         # Search for recordings in the last 30 days
         now = datetime.now()
@@ -538,11 +534,12 @@ class HikvisionMediaSource(MediaSource):
         actual_track_id = track_id * 100 + 1
 
         recording_days = await self.hass.async_add_executor_job(
-            client.get_recording_days, actual_track_id, start_date, now
+            camera.get_recording_days, actual_track_id, start_date, now
         )
 
         children: list[BrowseMediaSource] = []
         for day in recording_days:
+            # pyHik returns RecordingDay objects with .date attribute
             date_str = day.date.strftime("%Y-%m-%d")
             children.append(
                 BrowseMediaSource(
@@ -559,13 +556,7 @@ class HikvisionMediaSource(MediaSource):
                 )
             )
 
-        # Get channel name for title
-        channels = await self.hass.async_add_executor_job(client.get_channels)
         channel_name = f"Channel {track_id}"
-        for channel in channels:
-            if channel["id"] == str(track_id):
-                channel_name = channel["name"]
-                break
 
         return BrowseMediaSource(
             domain=DOMAIN,
@@ -591,9 +582,7 @@ class HikvisionMediaSource(MediaSource):
         if entry is None:
             raise Unresolvable(f"Config entry {config_entry_id} not found")
 
-        client = await self.hass.async_add_executor_job(
-            HikvisionISAPIClient, entry.runtime_data.camera
-        )
+        camera = entry.runtime_data.camera
 
         # Search for recordings on the specific day
         start_time = datetime(year, month, day, 0, 0, 0)
@@ -603,7 +592,7 @@ class HikvisionMediaSource(MediaSource):
         actual_track_id = track_id * 100 + 1
 
         recordings = await self.hass.async_add_executor_job(
-            client.search_recordings, actual_track_id, start_time, end_time
+            camera.search_recordings, actual_track_id, start_time, end_time
         )
 
         children: list[BrowseMediaSource] = []

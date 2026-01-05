@@ -6,7 +6,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from homeassistant.components.hikvision.const import DOMAIN
-from homeassistant.components.hikvision.isapi import Recording, RecordingDay
 from homeassistant.components.media_source import (
     DOMAIN as MEDIA_SOURCE_DOMAIN,
     URI_SCHEME,
@@ -32,28 +31,57 @@ async def setup_component(hass: HomeAssistant) -> None:
 
 
 @pytest.fixture
-def mock_isapi_client() -> MagicMock:
-    """Return a mocked HikvisionISAPIClient."""
-    client = MagicMock()
-    client.get_channels.return_value = [
-        {"id": "101", "name": "Front Door"},
-        {"id": "201", "name": "Backyard"},
-    ]
-    client.get_recording_days.return_value = [
-        RecordingDay(date=datetime(2024, 1, 15, 0, 0), has_recordings=True),
-        RecordingDay(date=datetime(2024, 1, 14, 0, 0), has_recordings=True),
-    ]
-    client.search_recordings.return_value = [
-        Recording(
-            source_id="1",
-            track_id=101,
-            start_time=datetime(2024, 1, 15, 10, 30, 0),
-            end_time=datetime(2024, 1, 15, 10, 35, 0),
-            content_type="video",
-            playback_uri="rtsp://192.168.1.100/Streaming/tracks/101/?starttime=20240115T103000Z&endtime=20240115T103500Z",
-        ),
-    ]
-    return client
+def mock_hikcamera_multi_channel(mock_hikcamera: MagicMock) -> MagicMock:
+    """Return a mocked HikCamera with multiple channels."""
+    camera = mock_hikcamera.return_value
+    camera.get_channels = MagicMock(return_value=[1, 2])
+    return mock_hikcamera
+
+
+@pytest.fixture
+def mock_hikcamera_with_days(mock_hikcamera: MagicMock) -> MagicMock:
+    """Return a mocked HikCamera with recording days."""
+    camera = mock_hikcamera.return_value
+
+    class MockRecordingDay:
+        def __init__(self, date: datetime) -> None:
+            self.date = date
+            self.has_recordings = True
+
+    camera.get_recording_days = MagicMock(
+        return_value=[
+            MockRecordingDay(datetime(2024, 1, 15, 0, 0)),
+            MockRecordingDay(datetime(2024, 1, 14, 0, 0)),
+        ]
+    )
+    return mock_hikcamera
+
+
+@pytest.fixture
+def mock_hikcamera_with_recordings(mock_hikcamera_with_days: MagicMock) -> MagicMock:
+    """Return a mocked HikCamera with recordings."""
+    camera = mock_hikcamera_with_days.return_value
+
+    class MockRecording:
+        def __init__(
+            self, start: datetime, end: datetime, track_id: int = 101
+        ) -> None:
+            self.source_id = f"source_{track_id}"
+            self.track_id = track_id
+            self.start_time = start
+            self.end_time = end
+            self.content_type = "video"
+            self.playback_uri = f"rtsp://192.168.1.100/Streaming/tracks/{track_id}/?starttime={start.strftime('%Y%m%dT%H%M%S')}Z&endtime={end.strftime('%Y%m%dT%H%M%S')}Z"
+
+    camera.search_recordings = MagicMock(
+        return_value=[
+            MockRecording(
+                datetime(2024, 1, 15, 10, 30, 0),
+                datetime(2024, 1, 15, 10, 35, 0),
+            ),
+        ]
+    )
+    return mock_hikcamera_with_days
 
 
 async def test_browse_root(
@@ -77,41 +105,32 @@ async def test_browse_root(
 async def test_browse_channels(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_hikcamera: MagicMock,
-    mock_isapi_client: MagicMock,
+    mock_hikcamera_multi_channel: MagicMock,
 ) -> None:
     """Test browsing channels of a device."""
     await setup_integration(hass, mock_config_entry)
 
-    with patch(
-        "homeassistant.components.hikvision.media_source.HikvisionISAPIClient",
-        return_value=mock_isapi_client,
-    ):
-        device_id = f"DEVICE|{mock_config_entry.entry_id}"
-        browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{device_id}")
+    device_id = f"DEVICE|{mock_config_entry.entry_id}"
+    browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{device_id}")
 
     assert browse.domain == DOMAIN
     assert browse.title == TEST_DEVICE_NAME
     assert len(browse.children) == 2
-    assert "Front Door" in browse.children[0].title
-    assert "Backyard" in browse.children[1].title
+    assert "Channel 1" in browse.children[0].title
+    assert "Channel 2" in browse.children[1].title
 
 
 async def test_browse_recording_days(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_hikcamera: MagicMock,
-    mock_isapi_client: MagicMock,
+    mock_hikcamera_with_days: MagicMock,
 ) -> None:
     """Test browsing recording days for a channel."""
     await setup_integration(hass, mock_config_entry)
 
-    with patch(
-        "homeassistant.components.hikvision.media_source.HikvisionISAPIClient",
-        return_value=mock_isapi_client,
-    ):
-        channel_id = f"CHANNEL|{mock_config_entry.entry_id}|101"
-        browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{channel_id}")
+    # Use channel 1 (becomes track 101 internally)
+    channel_id = f"CHANNEL|{mock_config_entry.entry_id}|1"
+    browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{channel_id}")
 
     assert browse.domain == DOMAIN
     assert "Recordings" in browse.title
@@ -123,23 +142,19 @@ async def test_browse_recording_days(
 async def test_browse_recordings(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
-    mock_hikcamera: MagicMock,
-    mock_isapi_client: MagicMock,
+    mock_hikcamera_with_recordings: MagicMock,
 ) -> None:
     """Test browsing recordings for a specific day."""
     await setup_integration(hass, mock_config_entry)
 
-    with patch(
-        "homeassistant.components.hikvision.media_source.HikvisionISAPIClient",
-        return_value=mock_isapi_client,
-    ):
-        day_id = f"DAY|{mock_config_entry.entry_id}|101|2024|1|15"
-        browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{day_id}")
+    day_id = f"DAY|{mock_config_entry.entry_id}|1|2024|1|15"
+    browse = await async_browse_media(hass, f"{URI_SCHEME}{DOMAIN}/{day_id}")
 
     assert browse.domain == DOMAIN
     assert "2024-01-15" in browse.title
     assert len(browse.children) == 1
-    assert browse.children[0].can_play is True
+    # Recordings are now expandable with time slots
+    assert browse.children[0].can_expand is True
     assert "10:30:00" in browse.children[0].title
 
 
@@ -151,25 +166,17 @@ async def test_resolve_media(
     """Test resolving media to a playable URL."""
     await setup_integration(hass, mock_config_entry)
 
-    # Mock the stream component
-    with patch(
-        "homeassistant.components.hikvision.media_source.create_stream"
-    ) as mock_stream:
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.endpoint_url.return_value = "http://localhost/stream.m3u8"
-        mock_stream.return_value = mock_stream_instance
-
-        file_id = (
-            f"FILE|{mock_config_entry.entry_id}|101|"
-            f"20240115T103000Z|20240115T103500Z|"
-            f"rtsp%3A%2F%2F192.168.1.100%2FStreaming%2Ftracks%2F101"
-        )
-        play_media = await async_resolve_media(
-            hass, f"{URI_SCHEME}{DOMAIN}/{file_id}", None
-        )
+    file_id = (
+        f"FILE|{mock_config_entry.entry_id}|1|"
+        f"20240115T103000Z|20240115T103500Z|"
+        f"rtsp%3A%2F%2F192.168.1.100%2FStreaming%2Ftracks%2F101"
+    )
+    play_media = await async_resolve_media(
+        hass, f"{URI_SCHEME}{DOMAIN}/{file_id}", None
+    )
 
     assert play_media.mime_type == "application/x-mpegURL"
-    assert "stream" in play_media.url
+    assert "/api/hikvision/hls/" in play_media.url
 
 
 async def test_browse_errors(
@@ -205,7 +212,6 @@ async def test_browse_nvr(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,
     mock_hik_nvr: MagicMock,
-    mock_isapi_client: MagicMock,
 ) -> None:
     """Test browsing an NVR device."""
     await setup_integration(hass, mock_config_entry)
@@ -225,28 +231,14 @@ async def test_resolve_without_playback_uri(
     mock_hikcamera: MagicMock,
 ) -> None:
     """Test resolving media without a playback URI constructs RTSP URL."""
-    mock_hikcamera.return_value.usr = "admin"
-    mock_hikcamera.return_value.pwd = "password"
-    mock_hikcamera.return_value.root_url = "http://192.168.1.100"
-
     await setup_integration(hass, mock_config_entry)
 
-    with patch(
-        "homeassistant.components.hikvision.media_source.create_stream"
-    ) as mock_stream:
-        mock_stream_instance = MagicMock()
-        mock_stream_instance.endpoint_url.return_value = "http://localhost/stream.m3u8"
-        mock_stream.return_value = mock_stream_instance
-
-        # No playback URI in the identifier
-        file_id = f"FILE|{mock_config_entry.entry_id}|101|20240115T103000Z|20240115T103500Z|"
-        play_media = await async_resolve_media(
-            hass, f"{URI_SCHEME}{DOMAIN}/{file_id}", None
-        )
+    # No playback URI in the identifier
+    file_id = f"FILE|{mock_config_entry.entry_id}|1|20240115T103000Z|20240115T103500Z|"
+    play_media = await async_resolve_media(
+        hass, f"{URI_SCHEME}{DOMAIN}/{file_id}", None
+    )
 
     assert play_media.mime_type == "application/x-mpegURL"
-    # Verify the stream was created with an RTSP URL
-    mock_stream.assert_called_once()
-    rtsp_url = mock_stream.call_args[0][1]
-    assert "rtsp://" in rtsp_url
-    assert "admin:password" in rtsp_url
+    # Should use HLS endpoint
+    assert "/api/hikvision/hls/" in play_media.url
