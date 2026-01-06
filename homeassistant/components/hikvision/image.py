@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from . import HikvisionConfigEntry
 from .coordinator import HikvisionDataUpdateCoordinator
@@ -75,5 +75,5 @@ class HikvisionSnapshot(HikvisionEntity, ImageEntity):
             return self._cached_image
         else:
             self._cached_image = image
-            self._attr_image_last_updated = datetime.now()
+            self._attr_image_last_updated = dt_util.utcnow()
             return image
