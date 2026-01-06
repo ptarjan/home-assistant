@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
@@ -113,12 +114,19 @@ class HikvisionDataUpdateCoordinator(DataUpdateCoordinator[HikvisionCoordinatorD
         # Get cameras
         data.cameras = await self.isapi_client.get_cameras()
 
-        # Get output ports
+        # Get output ports and their states in parallel
         data.output_ports = await self.isapi_client.get_output_ports()
-        for port in data.output_ports:
-            data.output_states[port.id] = await self.isapi_client.get_output_state(
-                port.id
+        if data.output_ports:
+            output_states = await asyncio.gather(
+                *(
+                    self.isapi_client.get_output_state(port.id)
+                    for port in data.output_ports
+                )
             )
+            data.output_states = {
+                port.id: state
+                for port, state in zip(data.output_ports, output_states, strict=True)
+            }
 
         # Get storage devices
         data.storage_devices = await self.isapi_client.get_storage_devices()
@@ -151,11 +159,18 @@ class HikvisionDataUpdateCoordinator(DataUpdateCoordinator[HikvisionCoordinatorD
             output_ports=self.data.output_ports,
         )
 
-        # Update output states
-        for port in data.output_ports:
-            data.output_states[port.id] = await self.isapi_client.get_output_state(
-                port.id
+        # Update output states in parallel
+        if data.output_ports:
+            output_states = await asyncio.gather(
+                *(
+                    self.isapi_client.get_output_state(port.id)
+                    for port in data.output_ports
+                )
             )
+            data.output_states = {
+                port.id: state
+                for port, state in zip(data.output_ports, output_states, strict=True)
+            }
 
         # Update storage devices
         data.storage_devices = await self.isapi_client.get_storage_devices()

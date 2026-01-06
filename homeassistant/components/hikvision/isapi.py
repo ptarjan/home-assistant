@@ -157,6 +157,7 @@ class ISAPIClient:
         username: str,
         password: str,
         ssl: bool = False,
+        rtsp_port: int = 554,
     ) -> None:
         """Initialize the ISAPI client."""
         self.hass = hass
@@ -165,6 +166,7 @@ class ISAPIClient:
         self.username = username
         self.password = password
         self.ssl = ssl
+        self.rtsp_port = rtsp_port
 
         protocol = "https" if ssl else "http"
         self.base_url = f"{protocol}://{host}:{port}"
@@ -175,7 +177,8 @@ class ISAPIClient:
 
     async def _get_client(self) -> httpx.AsyncClient:
         """Get HTTP client with proper authentication."""
-        return get_async_client(self.hass, verify_ssl=self.ssl)
+        # Don't verify SSL for local devices with self-signed certificates
+        return get_async_client(self.hass, verify_ssl=False)
 
     async def _detect_auth_method(self) -> None:
         """Detect the authentication method (Basic or Digest)."""
@@ -677,10 +680,9 @@ class ISAPIClient:
         """Get RTSP URL for a channel."""
         stream_id = channel * 100 + stream_type
         protocol = "rtsps" if self.ssl else "rtsp"
-        rtsp_port = 554  # Default RTSP port
         return (
             f"{protocol}://{self.username}:{self.password}@"
-            f"{self.host}:{rtsp_port}/Streaming/Channels/{stream_id}"
+            f"{self.host}:{self.rtsp_port}/Streaming/Channels/{stream_id}"
         )
 
     async def reboot(self) -> None:

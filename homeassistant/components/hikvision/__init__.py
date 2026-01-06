@@ -21,7 +21,7 @@ from homeassistant.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
-from .const import DOMAIN
+from .const import CONF_RTSP_PORT, DEFAULT_RTSP_PORT, DOMAIN
 from .coordinator import HikvisionDataUpdateCoordinator, HikvisionSecondaryCoordinator
 from .isapi import ISAPIAuthError, ISAPIClient, ISAPIConnectionError, ISAPIError
 from .services import async_setup_services, async_unload_services
@@ -65,9 +65,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
 
     protocol = "https" if ssl else "http"
     url = f"{protocol}://{host}"
+    rtsp_port = entry.options.get(CONF_RTSP_PORT, DEFAULT_RTSP_PORT)
 
     # Create ISAPI client for extended functionality
-    isapi_client = ISAPIClient(hass, host, port, username, password, ssl)
+    isapi_client = ISAPIClient(
+        hass, host, port, username, password, ssl, rtsp_port=rtsp_port
+    )
 
     # Validate connection using ISAPI
     try:
