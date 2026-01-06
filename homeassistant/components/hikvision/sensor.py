@@ -14,7 +14,6 @@ from homeassistant.components.sensor import (
 from homeassistant.const import EntityCategory, UnitOfInformation
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HikvisionConfigEntry
 from .coordinator import HikvisionCoordinatorData, HikvisionSecondaryCoordinator
@@ -138,11 +137,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HikvisionStorageSensor(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionSecondaryCoordinator],
-    SensorEntity,
-):
+class HikvisionStorageSensor(HikvisionEntity, SensorEntity):
     """Representation of a Hikvision storage sensor."""
 
     entity_description: HikvisionStorageSensorDescription
@@ -200,11 +195,7 @@ class HikvisionStorageSensor(
         return self.entity_description.extra_state_fn(storage)
 
 
-class HikvisionAlarmServerSensor(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionSecondaryCoordinator],
-    SensorEntity,
-):
+class HikvisionAlarmServerSensor(HikvisionEntity, SensorEntity):
     """Representation of a Hikvision alarm server sensor."""
 
     entity_description: HikvisionAlarmServerSensorDescription

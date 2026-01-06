@@ -8,7 +8,6 @@ import logging
 from homeassistant.components.image import ImageEntity
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HikvisionConfigEntry
 from .coordinator import HikvisionDataUpdateCoordinator
@@ -48,11 +47,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HikvisionSnapshot(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionDataUpdateCoordinator],
-    ImageEntity,
-):
+class HikvisionSnapshot(HikvisionEntity, ImageEntity):
     """Representation of a Hikvision camera snapshot."""
 
     def __init__(
@@ -63,8 +58,7 @@ class HikvisionSnapshot(
         camera_name: str,
     ) -> None:
         """Initialize the image entity."""
-        HikvisionEntity.__init__(self, coordinator, entry)
-        CoordinatorEntity.__init__(self, coordinator)
+        super().__init__(coordinator, entry)
         ImageEntity.__init__(self, coordinator.hass)
 
         self._camera_id = camera_id

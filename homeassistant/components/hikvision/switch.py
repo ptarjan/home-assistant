@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import logging
 from typing import Any
 
-from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import HikvisionConfigEntry
 from .coordinator import HikvisionDataUpdateCoordinator
@@ -32,11 +30,6 @@ EVENT_TYPE_NAMES: dict[str, str] = {
     "PIR": "PIR",
     "faceDetection": "Face detection",
 }
-
-
-@dataclass(frozen=True, kw_only=True)
-class HikvisionSwitchEntityDescription(SwitchEntityDescription):
-    """Describe a Hikvision switch entity."""
 
 
 async def async_setup_entry(
@@ -85,11 +78,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class HikvisionEventSwitch(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionDataUpdateCoordinator],
-    SwitchEntity,
-):
+class HikvisionEventSwitch(HikvisionEntity, SwitchEntity):
     """Representation of a Hikvision event detection switch."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -145,11 +134,7 @@ class HikvisionEventSwitch(
             _LOGGER.error("Failed to disable event detection: %s", err)
 
 
-class HikvisionOutputSwitch(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionDataUpdateCoordinator],
-    SwitchEntity,
-):
+class HikvisionOutputSwitch(HikvisionEntity, SwitchEntity):
     """Representation of a Hikvision output port switch."""
 
     _attr_entity_category = EntityCategory.CONFIG
@@ -191,11 +176,7 @@ class HikvisionOutputSwitch(
             _LOGGER.error("Failed to turn off output port: %s", err)
 
 
-class HikvisionHolidayModeSwitch(
-    HikvisionEntity,
-    CoordinatorEntity[HikvisionDataUpdateCoordinator],
-    SwitchEntity,
-):
+class HikvisionHolidayModeSwitch(HikvisionEntity, SwitchEntity):
     """Representation of a Hikvision holiday mode switch."""
 
     _attr_entity_category = EntityCategory.CONFIG
