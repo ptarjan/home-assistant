@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from xml.etree.ElementTree import ParseError
 
 from pyhik.constants import SENSOR_MAP
 from pyhik.hikvision import HikCamera
@@ -85,8 +86,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
 
         def fetch_and_inject_nvr_events() -> None:
             """Fetch and inject NVR events in a single executor job."""
-            nvr_events = camera.get_event_triggers(nvr_notification_methods)
-            _LOGGER.debug("NVR events fetched with extended methods: %s", nvr_events)
+            try:
+                nvr_events = camera.get_event_triggers(nvr_notification_methods)
+            except (requests.exceptions.RequestException, ParseError) as err:
+                _LOGGER.debug(
+                    "Failed to fetch event triggers for %s (%s): %s",
+                    device_name,
+                    device_type,
+                    err,
+                )
+                return
+
+            _LOGGER.debug(
+                "NVR events fetched for %s (%s): %s",
+                device_name,
+                device_type,
+                nvr_events,
+            )
             if nvr_events:
                 # Map raw event type names to friendly names using SENSOR_MAP
                 mapped_events: dict[str, list[int]] = {}
