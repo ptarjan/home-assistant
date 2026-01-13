@@ -67,6 +67,18 @@ DEVICE_CLASS_MAP: dict[str, BinarySensorDeviceClass | None] = {
     "Entering Region": BinarySensorDeviceClass.MOTION,
 }
 
+# System-level sensor types that belong to the NVR device, not camera channels
+NVR_SYSTEM_SENSORS: set[str] = {
+    "Disk Full",
+    "Disk Error",
+    "Net Interface Broken",
+    "IP Conflict",
+    "Illegal Access",
+    "Recording Failure",
+    "Video Mismatch",
+    "Bad Video",
+}
+
 _LOGGER = logging.getLogger(__name__)
 
 CUSTOMIZE_SCHEMA = vol.Schema(
@@ -187,14 +199,30 @@ class HikvisionBinarySensor(BinarySensorEntity):
 
         # Device info for device registry
         if self._data.device_type == "NVR":
-            # NVR channels get their own device linked to the NVR via via_device
-            self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, f"{self._data.device_id}_{channel}")},
-                via_device=(DOMAIN, self._data.device_id),
-                name=f"{self._data.device_name} Channel {channel}",
-                manufacturer="Hikvision",
-                model="NVR Channel",
-            )
+            # System-level sensors go on the main NVR device
+            # Channel-specific sensors (motion, etc.) go on their channel device
+            if sensor_type in NVR_SYSTEM_SENSORS:
+                self._attr_device_info = DeviceInfo(
+                    identifiers={(DOMAIN, self._data.device_id)},
+                    name=self._data.device_name,
+                    manufacturer="Hikvision",
+                    model="NVR",
+                )
+            else:
+                # Channel-specific sensors go on their channel device
+                # Try to get the channel name from channels list
+                channel_name = f"{self._data.device_name} channel {channel}"
+                for ch in self._data.channels:
+                    if ch.id == channel:
+                        channel_name = ch.name
+                        break
+                self._attr_device_info = DeviceInfo(
+                    identifiers={(DOMAIN, f"{self._data.device_id}_{channel}")},
+                    via_device=(DOMAIN, self._data.device_id),
+                    name=channel_name,
+                    manufacturer="Hikvision",
+                    model="NVR channel",
+                )
             self._attr_name = sensor_type
         else:
             # Single camera device

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pyhik.hikvision import VideoChannel
+
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -21,34 +23,24 @@ async def async_setup_entry(
 ) -> None:
     """Set up Hikvision cameras from a config entry."""
     data = entry.runtime_data
-    camera = data.camera
 
-    # Get available channels from the library
-    channels = await hass.async_add_executor_job(camera.get_channels)
-
-    if not channels:
-        # Fallback to single camera if no channels detected
-        channels = [1]
-
-    # Get channel names (if available from the device)
-    def get_channel_names() -> dict[int, str | None]:
-        """Fetch channel names from device."""
-        names: dict[int, str | None] = {}
-        for channel in channels:
-            try:
-                name = camera.get_channel_name(channel)
-                names[channel] = name if name else None
-            except (AttributeError, Exception):  # noqa: BLE001
-                # Library doesn't support get_channel_name or error occurred
-                names[channel] = None
-        return names
-
-    channel_names = await hass.async_add_executor_job(get_channel_names)
-
-    async_add_entities(
-        HikvisionCamera(entry, channel, channel_names.get(channel))
-        for channel in channels
-    )
+    if data.channels:
+        # NVR with video channels from get_video_channels()
+        async_add_entities(
+            HikvisionCamera(entry, channel)
+            for channel in data.channels
+            if channel.enabled
+        )
+    else:
+        # Single camera - create a default VideoChannel
+        async_add_entities(
+            [
+                HikvisionCamera(
+                    entry,
+                    VideoChannel(id=1, name=data.device_name, enabled=True),
+                )
+            ]
+        )
 
 
 class HikvisionCamera(Camera):
@@ -61,8 +53,7 @@ class HikvisionCamera(Camera):
     def __init__(
         self,
         entry: HikvisionConfigEntry,
-        channel: int,
-        channel_name: str | None = None,
+        channel: VideoChannel,
     ) -> None:
         """Initialize the camera."""
         super().__init__()
@@ -71,23 +62,17 @@ class HikvisionCamera(Camera):
         self._camera = self._data.camera
 
         # Build unique ID (unique per platform per integration)
-        self._attr_unique_id = f"{self._data.device_id}_{channel}"
+        self._attr_unique_id = f"{self._data.device_id}_{channel.id}"
 
         # Device info for device registry
         if self._data.device_type == "NVR":
             # NVR channels get their own device linked to the NVR via via_device
-            # Use channel name if available, otherwise fall back to "Channel {n}"
-            device_name = (
-                channel_name
-                if channel_name
-                else f"{self._data.device_name} Channel {channel}"
-            )
             self._attr_device_info = DeviceInfo(
-                identifiers={(DOMAIN, f"{self._data.device_id}_{channel}")},
+                identifiers={(DOMAIN, f"{self._data.device_id}_{channel.id}")},
                 via_device=(DOMAIN, self._data.device_id),
-                name=device_name,
+                name=channel.name,
                 manufacturer="Hikvision",
-                model="NVR Channel",
+                model="NVR channel",
             )
         else:
             # Single camera device
@@ -104,13 +89,13 @@ class HikvisionCamera(Camera):
         """Return a still image from the camera."""
         try:
             return await self.hass.async_add_executor_job(
-                self._camera.get_snapshot, self._channel
+                self._camera.get_snapshot, self._channel.id
             )
         except Exception as err:
             raise HomeAssistantError(
-                f"Error getting image from {self._data.device_name} channel {self._channel}: {err}"
+                f"Error getting image from {self._channel.name}: {err}"
             ) from err
 
     async def stream_source(self) -> str | None:
         """Return the stream source URL."""
-        return self._camera.get_stream_url(self._channel)
+        return self._camera.get_stream_url(self._channel.id)
