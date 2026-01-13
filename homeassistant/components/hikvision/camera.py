@@ -26,13 +26,29 @@ async def async_setup_entry(
     # Get available channels from the library
     channels = await hass.async_add_executor_job(camera.get_channels)
 
-    if channels:
-        entities = [HikvisionCamera(entry, channel) for channel in channels]
-    else:
+    if not channels:
         # Fallback to single camera if no channels detected
-        entities = [HikvisionCamera(entry, 1)]
+        channels = [1]
 
-    async_add_entities(entities)
+    # Get channel names (if available from the device)
+    def get_channel_names() -> dict[int, str | None]:
+        """Fetch channel names from device."""
+        names: dict[int, str | None] = {}
+        for channel in channels:
+            try:
+                name = camera.get_channel_name(channel)
+                names[channel] = name if name else None
+            except (AttributeError, Exception):  # noqa: BLE001
+                # Library doesn't support get_channel_name or error occurred
+                names[channel] = None
+        return names
+
+    channel_names = await hass.async_add_executor_job(get_channel_names)
+
+    async_add_entities(
+        HikvisionCamera(entry, channel, channel_names.get(channel))
+        for channel in channels
+    )
 
 
 class HikvisionCamera(Camera):
@@ -46,6 +62,7 @@ class HikvisionCamera(Camera):
         self,
         entry: HikvisionConfigEntry,
         channel: int,
+        channel_name: str | None = None,
     ) -> None:
         """Initialize the camera."""
         super().__init__()
@@ -59,10 +76,16 @@ class HikvisionCamera(Camera):
         # Device info for device registry
         if self._data.device_type == "NVR":
             # NVR channels get their own device linked to the NVR via via_device
+            # Use channel name if available, otherwise fall back to "Channel {n}"
+            device_name = (
+                channel_name
+                if channel_name
+                else f"{self._data.device_name} Channel {channel}"
+            )
             self._attr_device_info = DeviceInfo(
                 identifiers={(DOMAIN, f"{self._data.device_id}_{channel}")},
                 via_device=(DOMAIN, self._data.device_id),
-                name=f"{self._data.device_name} Channel {channel}",
+                name=device_name,
                 manufacturer="Hikvision",
                 model="NVR Channel",
             )
