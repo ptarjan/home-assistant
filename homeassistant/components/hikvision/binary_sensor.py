@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -11,6 +12,7 @@ from homeassistant.components.binary_sensor import (
     PLATFORM_SCHEMA as BINARY_SENSOR_PLATFORM_SCHEMA,
     BinarySensorDeviceClass,
     BinarySensorEntity,
+    BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import SOURCE_IMPORT
 from homeassistant.const import (
@@ -23,6 +25,7 @@ from homeassistant.const import (
     CONF_PORT,
     CONF_SSL,
     CONF_USERNAME,
+    EntityCategory,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
@@ -42,29 +45,125 @@ CONF_IGNORED = "ignored"
 DEFAULT_DELAY = 0
 DEFAULT_IGNORED = False
 
-# Device class mapping for Hikvision event types
-DEVICE_CLASS_MAP: dict[str, BinarySensorDeviceClass | None] = {
-    "Motion": BinarySensorDeviceClass.MOTION,
-    "Line Crossing": BinarySensorDeviceClass.MOTION,
-    "Field Detection": BinarySensorDeviceClass.MOTION,
-    "Tamper Detection": BinarySensorDeviceClass.MOTION,
-    "Shelter Alarm": None,
-    "Disk Full": None,
-    "Disk Error": None,
-    "Net Interface Broken": BinarySensorDeviceClass.CONNECTIVITY,
-    "IP Conflict": BinarySensorDeviceClass.CONNECTIVITY,
-    "Illegal Access": None,
-    "Video Mismatch": None,
-    "Bad Video": None,
-    "PIR Alarm": BinarySensorDeviceClass.MOTION,
-    "Face Detection": BinarySensorDeviceClass.MOTION,
-    "Scene Change Detection": BinarySensorDeviceClass.MOTION,
-    "I/O": None,
-    "Unattended Baggage": BinarySensorDeviceClass.MOTION,
-    "Attended Baggage": BinarySensorDeviceClass.MOTION,
-    "Recording Failure": None,
-    "Exiting Region": BinarySensorDeviceClass.MOTION,
-    "Entering Region": BinarySensorDeviceClass.MOTION,
+
+@dataclass(frozen=True, kw_only=True)
+class HikvisionBinarySensorEntityDescription(BinarySensorEntityDescription):
+    """Describes a Hikvision binary sensor entity."""
+
+
+# Entity descriptions for known Hikvision event types
+# The key matches the sensor_type from pyhik (the friendly name from SENSOR_MAP)
+BINARY_SENSOR_DESCRIPTIONS: dict[str, HikvisionBinarySensorEntityDescription] = {
+    "Motion": HikvisionBinarySensorEntityDescription(
+        key="motion",
+        translation_key="motion",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Line Crossing": HikvisionBinarySensorEntityDescription(
+        key="line_crossing",
+        translation_key="line_crossing",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Field Detection": HikvisionBinarySensorEntityDescription(
+        key="field_detection",
+        translation_key="field_detection",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Tamper Detection": HikvisionBinarySensorEntityDescription(
+        key="tamper_detection",
+        translation_key="tamper_detection",
+        device_class=BinarySensorDeviceClass.TAMPER,
+    ),
+    "Shelter Alarm": HikvisionBinarySensorEntityDescription(
+        key="shelter_alarm",
+        translation_key="shelter_alarm",
+    ),
+    "Disk Full": HikvisionBinarySensorEntityDescription(
+        key="disk_full",
+        translation_key="disk_full",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "Disk Error": HikvisionBinarySensorEntityDescription(
+        key="disk_error",
+        translation_key="disk_error",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "Net Interface Broken": HikvisionBinarySensorEntityDescription(
+        key="net_interface_broken",
+        translation_key="net_interface_broken",
+        device_class=BinarySensorDeviceClass.CONNECTIVITY,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "IP Conflict": HikvisionBinarySensorEntityDescription(
+        key="ip_conflict",
+        translation_key="ip_conflict",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "Illegal Access": HikvisionBinarySensorEntityDescription(
+        key="illegal_access",
+        translation_key="illegal_access",
+        device_class=BinarySensorDeviceClass.SAFETY,
+    ),
+    "Video Mismatch": HikvisionBinarySensorEntityDescription(
+        key="video_mismatch",
+        translation_key="video_mismatch",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "Bad Video": HikvisionBinarySensorEntityDescription(
+        key="bad_video",
+        translation_key="bad_video",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "PIR Alarm": HikvisionBinarySensorEntityDescription(
+        key="pir_alarm",
+        translation_key="pir_alarm",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Face Detection": HikvisionBinarySensorEntityDescription(
+        key="face_detection",
+        translation_key="face_detection",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Scene Change Detection": HikvisionBinarySensorEntityDescription(
+        key="scene_change_detection",
+        translation_key="scene_change_detection",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "I/O": HikvisionBinarySensorEntityDescription(
+        key="io",
+        translation_key="io",
+    ),
+    "Unattended Baggage": HikvisionBinarySensorEntityDescription(
+        key="unattended_baggage",
+        translation_key="unattended_baggage",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Attended Baggage": HikvisionBinarySensorEntityDescription(
+        key="attended_baggage",
+        translation_key="attended_baggage",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Recording Failure": HikvisionBinarySensorEntityDescription(
+        key="recording_failure",
+        translation_key="recording_failure",
+        device_class=BinarySensorDeviceClass.PROBLEM,
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    "Exiting Region": HikvisionBinarySensorEntityDescription(
+        key="exiting_region",
+        translation_key="exiting_region",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
+    "Entering Region": HikvisionBinarySensorEntityDescription(
+        key="entering_region",
+        translation_key="entering_region",
+        device_class=BinarySensorDeviceClass.MOTION,
+    ),
 }
 
 _LOGGER = logging.getLogger(__name__)
@@ -156,6 +255,12 @@ async def async_setup_entry(
     async_add_entities(
         HikvisionBinarySensor(
             entry=entry,
+            description=BINARY_SENSOR_DESCRIPTIONS.get(
+                sensor_type,
+                HikvisionBinarySensorEntityDescription(
+                    key=sensor_type.lower().replace(" ", "_"),
+                ),
+            ),
             sensor_type=sensor_type,
             channel=channel_info[1],
         )
@@ -169,14 +274,17 @@ class HikvisionBinarySensor(BinarySensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    entity_description: HikvisionBinarySensorEntityDescription
 
     def __init__(
         self,
         entry: HikvisionConfigEntry,
+        description: HikvisionBinarySensorEntityDescription,
         sensor_type: str,
         channel: int,
     ) -> None:
         """Initialize the binary sensor."""
+        self.entity_description = description
         self._data = entry.runtime_data
         self._camera = self._data.camera
         self._sensor_type = sensor_type
@@ -195,7 +303,6 @@ class HikvisionBinarySensor(BinarySensorEntity):
                 manufacturer="Hikvision",
                 model="NVR Channel",
             )
-            self._attr_name = sensor_type
         else:
             # Single camera device
             self._attr_device_info = DeviceInfo(
@@ -204,10 +311,11 @@ class HikvisionBinarySensor(BinarySensorEntity):
                 manufacturer="Hikvision",
                 model=self._data.device_type,
             )
-            self._attr_name = sensor_type
 
-        # Set device class
-        self._attr_device_class = DEVICE_CLASS_MAP.get(sensor_type)
+        # For unknown sensor types without translation_key, use sensor_type as name
+        if not description.translation_key:
+            self._attr_translation_key = None
+            self._attr_name = sensor_type
 
         # Callback ID for pyhik
         self._callback_id = f"{self._data.device_id}.{sensor_type}.{channel}"
