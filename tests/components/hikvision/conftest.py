@@ -23,6 +23,26 @@ TEST_PASSWORD = "password123"
 TEST_DEVICE_ID = "DS-2CD2142FWD-I20170101AAAA"
 TEST_DEVICE_NAME = "Front Camera"
 
+# Mock SENSOR_MAP from pyhik.constants
+MOCK_SENSOR_MAP = {
+    "motion": "Motion",
+    "line crossing": "Line Crossing",
+    "field detection": "Field Detection",
+    "video loss": "Video Loss",
+    "tamper detection": "Tamper Detection",
+    "shelter alarm": "Shelter Alarm",
+    "disk full": "Disk Full",
+    "disk error": "Disk Error",
+    "net interface broken": "Net Interface Broken",
+    "ip conflict": "IP Conflict",
+    "illegal access": "Illegal Access",
+    "video mismatch": "Video Mismatch",
+    "bad video": "Bad Video",
+    "pir alarm": "PIR Alarm",
+    "face detection": "Face Detection",
+    "scene change detection": "Scene Change Detection",
+}
+
 
 @pytest.fixture
 def mock_setup_entry() -> Generator[AsyncMock]:
@@ -63,6 +83,10 @@ def mock_hikcamera() -> Generator[MagicMock]:
         patch(
             "homeassistant.components.hikvision.config_flow.HikCamera",
             new=hikcamera_mock,
+        ),
+        patch(
+            "homeassistant.components.hikvision.SENSOR_MAP",
+            MOCK_SENSOR_MAP,
         ),
     ):
         camera = hikcamera_mock.return_value

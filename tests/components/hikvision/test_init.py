@@ -129,9 +129,7 @@ async def test_setup_entry_nvr_event_fetch_parse_error(
     mock_hik_nvr: MagicMock,
 ) -> None:
     """Test setup continues when NVR event fetch fails with ParseError."""
-    mock_hik_nvr.return_value.get_event_triggers.side_effect = ParseError(
-        "Invalid XML"
-    )
+    mock_hik_nvr.return_value.get_event_triggers.side_effect = ParseError("Invalid XML")
 
     await setup_integration(hass, mock_config_entry)
 
