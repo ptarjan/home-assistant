@@ -21,7 +21,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, issue_registry as ir
 
 from .const import DOMAIN
 
@@ -140,6 +140,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
                 )
 
         await hass.async_add_executor_job(fetch_and_inject_nvr_events)
+
+    # Check if video encryption is enabled and warn the user
+    encryption_enabled = await hass.async_add_executor_job(camera.get_video_encryption)
+    if encryption_enabled:
+        ir.async_create_issue(
+            hass,
+            DOMAIN,
+            f"video_encryption_{device_id}",
+            is_fixable=False,
+            is_persistent=False,
+            severity=ir.IssueSeverity.WARNING,
+            translation_key="video_encryption_enabled",
+            translation_placeholders={"device_name": device_name},
+        )
+        _LOGGER.warning(
+            "Video encryption is enabled on %s. Camera streams and snapshots"
+            " will not work. Disable video encryption in the device settings"
+            " under Configuration > Network > Advanced Settings > Platform"
+            " Access, or disable Hik-Connect",
+            device_name,
+        )
+    else:
+        ir.async_delete_issue(hass, DOMAIN, f"video_encryption_{device_id}")
 
     # Start the event stream
     await hass.async_add_executor_job(camera.start_stream)

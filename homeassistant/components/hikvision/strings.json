@@ -99,6 +99,10 @@
     "deprecated_yaml_import_issue": {
       "description": "Configuring {integration_title} using YAML is deprecated and the import failed. Please remove the `{domain}` entry from your `configuration.yaml` file and set up the integration manually.",
       "title": "YAML import failed"
+    },
+    "video_encryption_enabled": {
+      "description": "Video encryption is enabled on `{device_name}`. Camera streams and snapshots will not work until encryption is disabled. To fix this, open the device web interface and navigate to **Configuration > Network > Advanced Settings > Platform Access** and disable Hik-Connect, or disable video encryption under **Configuration > System > Security > Encryption**.",
+      "title": "Video encryption enabled"
     }
   }
 }

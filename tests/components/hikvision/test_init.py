@@ -7,12 +7,14 @@ from xml.etree.ElementTree import ParseError
 import pytest
 import requests
 
+from homeassistant.components.hikvision.const import DOMAIN
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_SSL
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 
 from . import setup_integration
-from .conftest import TEST_HOST, TEST_PASSWORD, TEST_PORT, TEST_USERNAME
+from .conftest import TEST_DEVICE_ID, TEST_HOST, TEST_PASSWORD, TEST_PORT, TEST_USERNAME
 
 from tests.common import MockConfigEntry
 
@@ -225,3 +227,58 @@ async def test_setup_entry_nvr_empty_events_returned(
     assert mock_config_entry.state is ConfigEntryState.LOADED
     mock_hik_nvr.return_value.get_event_triggers.assert_called_once()
     mock_hik_nvr.return_value.inject_events.assert_not_called()
+
+
+async def test_setup_entry_video_encryption_enabled(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test repair issue created when video encryption is enabled."""
+    mock_hikcamera.return_value.get_video_encryption.return_value = True
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    issue_reg = ir.async_get(hass)
+    issue = issue_reg.async_get_issue(DOMAIN, f"video_encryption_{TEST_DEVICE_ID}")
+    assert issue is not None
+    assert issue.severity == ir.IssueSeverity.WARNING
+    assert issue.translation_key == "video_encryption_enabled"
+    assert "Video encryption is enabled" in caplog.text
+
+
+async def test_setup_entry_video_encryption_disabled(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test no repair issue when video encryption is disabled."""
+    mock_hikcamera.return_value.get_video_encryption.return_value = False
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    issue_reg = ir.async_get(hass)
+    issue = issue_reg.async_get_issue(DOMAIN, f"video_encryption_{TEST_DEVICE_ID}")
+    assert issue is None
+
+
+async def test_setup_entry_video_encryption_not_supported(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test no repair issue when device does not support encryption endpoint."""
+    mock_hikcamera.return_value.get_video_encryption.return_value = None
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert mock_config_entry.state is ConfigEntryState.LOADED
+
+    issue_reg = ir.async_get(hass)
+    issue = issue_reg.async_get_issue(DOMAIN, f"video_encryption_{TEST_DEVICE_ID}")
+    assert issue is None

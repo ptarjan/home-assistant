@@ -132,6 +132,9 @@ def mock_hikcamera(mock_hik_get_channels: MagicMock) -> Generator[MagicMock]:
             f"@{TEST_HOST}:554/Streaming/Channels/1"
         )
 
+        # Video encryption check (default: not supported/not enabled)
+        camera.get_video_encryption.return_value = None
+
         yield hikcamera_mock
 
 
