@@ -7,7 +7,7 @@ from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.camera import async_get_image, async_get_stream_source
 from homeassistant.components.hikvision.const import DOMAIN
-from homeassistant.const import Platform
+from homeassistant.const import STATE_UNAVAILABLE, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
@@ -148,6 +148,25 @@ async def test_camera_image_error(
 
     with pytest.raises(HomeAssistantError, match="Error getting image"):
         await async_get_image(hass, "camera.front_camera")
+
+
+async def test_camera_unavailable_when_stream_disconnected(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test the camera is unavailable and skips snapshots when disconnected."""
+    mock_hikcamera.return_value.stream_connected = False
+
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("camera.front_camera")
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE
+
+    with pytest.raises(HomeAssistantError, match="unavailable"):
+        await async_get_image(hass, "camera.front_camera")
+    mock_hikcamera.return_value.get_snapshot.assert_not_called()
 
 
 async def test_camera_stream_source(
