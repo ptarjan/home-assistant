@@ -114,7 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
             if nvr_events:
                 # Map raw event type names to friendly names using SENSOR_MAP
                 mapped_events: dict[str, list[int]] = {}
-                for event_type, channels in nvr_events.items():
+                for event_type, event_channels in nvr_events.items():
                     event_key = event_type.lower()
                     # Skip videoloss - used as watchdog by pyhik, not a real sensor
                     if event_key == "videoloss":
@@ -123,10 +123,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: HikvisionConfigEntry) ->
                     if friendly_name is None:
                         _LOGGER.debug("Skipping unmapped event type: %s", event_type)
                         continue
-                    if friendly_name in mapped_events:
-                        mapped_events[friendly_name].extend(channels)
-                    else:
-                        mapped_events[friendly_name] = list(channels)
+                    # Several raw event types can map to the same friendly
+                    # name, so keep each channel only once
+                    mapped_channels = mapped_events.setdefault(friendly_name, [])
+                    for event_channel in event_channels:
+                        if event_channel not in mapped_channels:
+                            mapped_channels.append(event_channel)
                 _LOGGER.debug("Mapped NVR events: %s", mapped_events)
                 if mapped_events:
                     camera.inject_events(mapped_events)

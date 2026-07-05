@@ -18,6 +18,7 @@ from homeassistant.const import (
     CONF_SSL,
     CONF_USERNAME,
     STATE_OFF,
+    STATE_UNAVAILABLE,
     Platform,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
@@ -163,6 +164,107 @@ async def test_binary_sensor_nvr_device(
     # Verify sensors are created (entity IDs depend on translation loading)
     states = hass.states.async_entity_ids("binary_sensor")
     assert len(states) == 2
+
+
+async def test_binary_sensor_duplicate_event_channels(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test duplicate (event, channel) pairs create a single entity."""
+    mock_hikcamera.return_value.current_event_states = {
+        "Motion": [(True, 1), (False, 1)],
+    }
+
+    await setup_integration(hass, mock_config_entry)
+
+    assert hass.states.async_entity_ids("binary_sensor") == [
+        "binary_sensor.front_camera_motion"
+    ]
+
+
+async def test_binary_sensor_video_loss_ignored(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test the videoloss watchdog event is skipped without a warning."""
+    mock_hikcamera.return_value.current_event_states = {
+        "Motion": [(False, 1)],
+        "Video Loss": [(False, 1)],
+    }
+
+    with caplog.at_level(logging.WARNING):
+        await setup_integration(hass, mock_config_entry)
+
+    assert hass.states.async_entity_ids("binary_sensor") == [
+        "binary_sensor.front_camera_motion"
+    ]
+    assert "Unknown Hikvision sensor type" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("attributes", "expected_target_type"),
+    [
+        pytest.param(
+            (True, None, None, "2024-01-01T12:00:00Z", "human"),
+            "human",
+            id="target_type",
+        ),
+        pytest.param(
+            (True, None, None, "2024-01-01T12:00:00Z", None),
+            None,
+            id="no_target_type",
+        ),
+        pytest.param(
+            (True, None, None, "2024-01-01T12:00:00Z"),
+            None,
+            id="legacy_attributes",
+        ),
+    ],
+)
+async def test_binary_sensor_target_type_attribute(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    attributes: tuple,
+    expected_target_type: str | None,
+) -> None:
+    """Test the detection target type is exposed as an attribute."""
+    mock_hikcamera.return_value.fetch_attributes.return_value = attributes
+
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.attributes.get("target_type") == expected_target_type
+
+
+async def test_binary_sensor_unavailable_when_stream_disconnected(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test sensors become unavailable when the event stream disconnects."""
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.state == STATE_OFF
+
+    # Simulate pyhik reporting a lost stream connection
+    mock_hikcamera.return_value.stream_connected = False
+    add_callback_call = mock_hikcamera.return_value.add_update_callback.call_args_list[
+        0
+    ]
+    callback_func = add_callback_call[0][0]
+    callback_func(add_callback_call[0][1])
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE
 
 
 async def test_binary_sensor_state_on(

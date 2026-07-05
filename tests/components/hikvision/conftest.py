@@ -112,6 +112,7 @@ def mock_hikcamera(mock_hik_get_channels: MagicMock) -> Generator[MagicMock]:
         camera.get_id = TEST_DEVICE_ID
         camera.get_name = TEST_DEVICE_NAME
         camera.get_type = "Camera"
+        camera.stream_connected = True
         camera.current_event_states = {
             "Motion": [(True, 1)],
             "Line Crossing": [(False, 1)],
@@ -121,6 +122,7 @@ def mock_hikcamera(mock_hik_get_channels: MagicMock) -> Generator[MagicMock]:
             None,
             None,
             "2024-01-01T00:00:00Z",
+            None,
         )
         camera.get_event_triggers.return_value = {}
 

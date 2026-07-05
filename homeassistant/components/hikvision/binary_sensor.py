@@ -37,6 +37,8 @@ from . import HikvisionConfigEntry
 from .const import DEFAULT_PORT, DOMAIN
 from .entity import HikvisionEntity
 
+ATTR_TARGET_TYPE = "target_type"
+
 CONF_IGNORED = "ignored"
 
 DEFAULT_DELAY = 0
@@ -156,6 +158,11 @@ BINARY_SENSOR_DESCRIPTIONS: dict[str, BinarySensorEntityDescription] = {
     ),
 }
 
+# pyhik uses videoloss as its stream watchdog rather than a real sensor event,
+# but it can still show up in event states (e.g. injected on some NVR setups).
+# Skip it silently instead of warning about an unknown sensor type.
+IGNORED_SENSOR_TYPES: frozenset[str] = frozenset({"Video Loss"})
+
 _LOGGER = logging.getLogger(__name__)
 
 CUSTOMIZE_SCHEMA = vol.Schema(
@@ -249,24 +256,38 @@ async def async_setup_entry(
 
     # Log warnings for unknown sensor types and skip them
     for sensor_type in sensors:
-        if sensor_type not in BINARY_SENSOR_DESCRIPTIONS:
+        if (
+            sensor_type not in BINARY_SENSOR_DESCRIPTIONS
+            and sensor_type not in IGNORED_SENSOR_TYPES
+        ):
             _LOGGER.warning(
                 "Unknown Hikvision sensor type '%s', please report this at "
                 "https://github.com/home-assistant/core/issues",
                 sensor_type,
             )
 
-    async_add_entities(
-        HikvisionBinarySensor(
-            entry=entry,
-            description=BINARY_SENSOR_DESCRIPTIONS[sensor_type],
-            sensor_type=sensor_type,
-            channel=channel_info[1],
-        )
-        for sensor_type, channel_list in sensors.items()
-        if sensor_type in BINARY_SENSOR_DESCRIPTIONS
-        for channel_info in channel_list
-    )
+    entities: list[HikvisionBinarySensor] = []
+    seen: set[tuple[str, int]] = set()
+    for sensor_type, channel_list in sensors.items():
+        if sensor_type not in BINARY_SENSOR_DESCRIPTIONS:
+            continue
+        for channel_info in channel_list:
+            channel = channel_info[1]
+            # Devices can report the same event/channel pair more than once
+            # (e.g. several raw event types map to the same friendly name);
+            # only one entity may claim the unique ID.
+            if (sensor_type, channel) in seen:
+                continue
+            seen.add((sensor_type, channel))
+            entities.append(
+                HikvisionBinarySensor(
+                    entry=entry,
+                    description=BINARY_SENSOR_DESCRIPTIONS[sensor_type],
+                    sensor_type=sensor_type,
+                    channel=channel,
+                )
+            )
+    async_add_entities(entities)
 
 
 class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
@@ -305,19 +326,8 @@ class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
         attrs = self._get_sensor_attributes()
-        return {ATTR_LAST_TRIP_TIME: attrs[3]}
-
-    async def async_added_to_hass(self) -> None:
-        """Register callback when entity is added."""
-        await super().async_added_to_hass()
-
-        # Register callback with pyhik
-        self._camera.add_update_callback(self._update_callback, self._callback_id)
-
-    def _update_callback(self, msg: str) -> None:
-        """Update the sensor's state when callback is triggered.
-
-        This is called from pyhik's event stream thread, so we use
-        schedule_update_ha_state which is thread-safe.
-        """
-        self.schedule_update_ha_state()
+        attributes = {ATTR_LAST_TRIP_TIME: attrs[3]}
+        # Detection target (e.g. human/vehicle) requires pyHik >= 0.4.3
+        if len(attrs) > 4 and attrs[4] is not None:
+            attributes[ATTR_TARGET_TYPE] = attrs[4]
+        return attributes

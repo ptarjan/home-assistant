@@ -11,7 +11,6 @@ from . import HikvisionConfigEntry
 from .entity import HikvisionEntity
 
 PARALLEL_UPDATES = 0
-RTSP_PORT = 554
 
 
 async def async_setup_entry(
@@ -59,10 +58,20 @@ class HikvisionCamera(HikvisionEntity, Camera):
         # Build unique ID (unique per platform per integration)
         self._attr_unique_id = f"{self._data.device_id}_{channel.id}"
 
+        # Never matched by pyhik event updates, only used for stream
+        # connection state broadcasts.
+        self._callback_id = f"{self._data.device_id}.camera.{channel.id}"
+
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return a still image from the camera."""
+        if not self.available:
+            # Don't hammer an unreachable device with snapshot requests;
+            # repeated failing logins can trigger its illegal-access lockout
+            raise HomeAssistantError(
+                f"Camera {self._video_channel.name} is unavailable"
+            )
         try:
             return await self.hass.async_add_executor_job(
                 self._camera.get_snapshot, self._video_channel.id
