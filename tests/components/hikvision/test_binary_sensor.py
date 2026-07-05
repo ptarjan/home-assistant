@@ -185,6 +185,43 @@ async def test_binary_sensor_state_on(
     assert state.state == "on"
 
 
+async def test_binary_sensor_duplicate_events_deduplicated(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test duplicate event/channel pairs only create one entity."""
+    mock_hikcamera.return_value.current_event_states = {
+        "Motion": [(False, 1), (False, 1)],
+        "Line Crossing": [(False, 1), (False, 1), (False, 2)],
+    }
+
+    await setup_integration(hass, mock_config_entry)
+
+    states = hass.states.async_entity_ids("binary_sensor")
+    assert len(states) == 3
+    assert "does not generate unique IDs" not in caplog.text
+
+
+async def test_binary_sensor_ignored_sensor_types(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test pyhik-internal event types are skipped without a warning."""
+    mock_hikcamera.return_value.current_event_states = {
+        "Ongoing Events": [(False, 1)],
+    }
+
+    with caplog.at_level(logging.WARNING):
+        await setup_integration(hass, mock_config_entry)
+
+    assert not hass.states.async_entity_ids("binary_sensor")
+    assert "Unknown Hikvision sensor type" not in caplog.text
+
+
 async def test_binary_sensor_device_class_unknown(
     hass: HomeAssistant,
     mock_config_entry: MockConfigEntry,

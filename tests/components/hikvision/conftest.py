@@ -122,7 +122,6 @@ def mock_hikcamera(mock_hik_get_channels: MagicMock) -> Generator[MagicMock]:
             None,
             "2024-01-01T00:00:00Z",
         )
-        camera.get_event_triggers.return_value = {}
 
         # pyHik 0.4.0 methods
         camera.get_channels.return_value = [1]
@@ -133,13 +132,3 @@ def mock_hikcamera(mock_hik_get_channels: MagicMock) -> Generator[MagicMock]:
         )
 
         yield hikcamera_mock
-
-
-@pytest.fixture
-def mock_hik_nvr(mock_hikcamera: MagicMock) -> MagicMock:
-    """Return a mocked HikCamera configured as an NVR."""
-    camera = mock_hikcamera.return_value
-    camera.get_type = "NVR"
-    camera.current_event_states = {}
-    camera.get_event_triggers.return_value = {"VMD": [1, 2]}
-    return mock_hikcamera

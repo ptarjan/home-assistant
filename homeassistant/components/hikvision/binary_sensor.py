@@ -42,6 +42,10 @@ CONF_IGNORED = "ignored"
 DEFAULT_DELAY = 0
 DEFAULT_IGNORED = False
 
+# Event types pyhik tracks internally but discards from the event stream;
+# an entity for them would never update
+IGNORED_SENSOR_TYPES = {"Ongoing Events"}
+
 
 # Entity descriptions for known Hikvision event types
 # The key matches the sensor_type from pyhik (the friendly name from SENSOR_MAP)
@@ -247,26 +251,35 @@ async def async_setup_entry(
         )
         return
 
-    # Log warnings for unknown sensor types and skip them
-    for sensor_type in sensors:
+    entities: list[HikvisionBinarySensor] = []
+    seen: set[tuple[str, int]] = set()
+    for sensor_type, channel_list in sensors.items():
+        if sensor_type in IGNORED_SENSOR_TYPES:
+            continue
         if sensor_type not in BINARY_SENSOR_DESCRIPTIONS:
             _LOGGER.warning(
                 "Unknown Hikvision sensor type '%s', please report this at "
                 "https://github.com/home-assistant/core/issues",
                 sensor_type,
             )
+            continue
+        for channel_info in channel_list:
+            channel = channel_info[1]
+            # Devices report an event once per configured notification method,
+            # so the same event/channel pair can be listed multiple times
+            if (sensor_type, channel) in seen:
+                continue
+            seen.add((sensor_type, channel))
+            entities.append(
+                HikvisionBinarySensor(
+                    entry=entry,
+                    description=BINARY_SENSOR_DESCRIPTIONS[sensor_type],
+                    sensor_type=sensor_type,
+                    channel=channel,
+                )
+            )
 
-    async_add_entities(
-        HikvisionBinarySensor(
-            entry=entry,
-            description=BINARY_SENSOR_DESCRIPTIONS[sensor_type],
-            sensor_type=sensor_type,
-            channel=channel_info[1],
-        )
-        for sensor_type, channel_list in sensors.items()
-        if sensor_type in BINARY_SENSOR_DESCRIPTIONS
-        for channel_info in channel_list
-    )
+    async_add_entities(entities)
 
 
 class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
