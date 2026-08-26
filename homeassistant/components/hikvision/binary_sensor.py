@@ -332,8 +332,7 @@ class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
         """Return the state attributes."""
         attrs = self._get_sensor_attributes()
         attributes: dict[str, Any] = {ATTR_LAST_TRIP_TIME: attrs[3]}
-        # Smart events carry the classification that triggered them; ordinary
-        # motion events don't.
+        # Only smart events carry a classification.
         if attrs[4] is not None:
             attributes[ATTR_DETECTION_TARGET] = attrs[4]
         return attributes
