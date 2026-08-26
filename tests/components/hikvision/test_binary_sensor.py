@@ -8,7 +8,7 @@ import pytest
 from syrupy.assertion import SnapshotAssertion
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
-from homeassistant.components.hikvision.const import DOMAIN
+from homeassistant.components.hikvision.const import ATTR_DETECTION_TARGET, DOMAIN
 from homeassistant.const import (
     ATTR_DEVICE_CLASS,
     ATTR_LAST_TRIP_TIME,
@@ -19,6 +19,7 @@ from homeassistant.const import (
     CONF_SSL,
     CONF_USERNAME,
     STATE_OFF,
+    STATE_UNAVAILABLE,
     Platform,
 )
 from homeassistant.core import DOMAIN as HOMEASSISTANT_DOMAIN, HomeAssistant
@@ -219,6 +220,7 @@ async def test_binary_sensor_state_on(
         None,
         None,
         "2024-01-01T12:00:00Z",
+        None,
     )
 
     await setup_integration(hass, mock_config_entry)
@@ -377,6 +379,7 @@ async def test_binary_sensor_update_callback(
         None,
         None,
         "2024-01-01T12:00:00Z",
+        None,
     )
 
     # Get the registered callback and call it
@@ -394,3 +397,61 @@ async def test_binary_sensor_update_callback(
     state = hass.states.get("binary_sensor.front_camera_motion")
     assert state is not None
     assert state.state == "on"
+
+
+async def test_binary_sensor_detection_target(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test the detection target of a smart event is exposed."""
+    mock_hikcamera.return_value.fetch_attributes.return_value = (
+        True,
+        None,
+        None,
+        "2024-01-01T12:00:00Z",
+        "human",
+    )
+
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.attributes[ATTR_DETECTION_TARGET] == "human"
+
+
+async def test_binary_sensor_no_detection_target(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test the attribute is absent for events without a detection target."""
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert ATTR_DETECTION_TARGET not in state.attributes
+
+
+async def test_binary_sensor_unavailable_when_stream_disconnected(
+    hass: HomeAssistant,
+    mock_config_entry: MockConfigEntry,
+    mock_hikcamera: MagicMock,
+) -> None:
+    """Test sensors go unavailable when the event stream disconnects."""
+    camera = mock_hikcamera.return_value
+    await setup_integration(hass, mock_config_entry)
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.state == STATE_OFF
+
+    # pyhik notifies every registered callback when the stream drops
+    camera.stream_connected = False
+    callback_func = camera.add_update_callback.call_args_list[0][0][0]
+    callback_func("stream disconnected")
+    await hass.async_block_till_done()
+
+    state = hass.states.get("binary_sensor.front_camera_motion")
+    assert state is not None
+    assert state.state == STATE_UNAVAILABLE

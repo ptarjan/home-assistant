@@ -35,7 +35,7 @@ from homeassistant.helpers.entity_platform import (
 from homeassistant.helpers.typing import ConfigType, DiscoveryInfoType
 
 from . import HikvisionConfigEntry
-from .const import DEFAULT_PORT, DOMAIN
+from .const import ATTR_DETECTION_TARGET, DEFAULT_PORT, DOMAIN
 from .entity import HikvisionEntity
 
 CONF_IGNORED = "ignored"
@@ -310,9 +310,15 @@ class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
         # Callback ID for pyhik
         self._callback_id = f"{self._data.device_id}.{sensor_type}.{channel}"
 
-    def _get_sensor_attributes(self) -> tuple[bool, Any, Any, Any]:
+    def _get_sensor_attributes(self) -> tuple[bool, Any, Any, Any, Any]:
         """Get sensor attributes from camera."""
         return self._camera.fetch_attributes(self._sensor_type, self._channel)
+
+    @property
+    @override
+    def available(self) -> bool:
+        """Return true if the device's event stream is connected."""
+        return self._camera.stream_connected
 
     @property
     @override
@@ -325,7 +331,12 @@ class HikvisionBinarySensor(HikvisionEntity, BinarySensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return the state attributes."""
         attrs = self._get_sensor_attributes()
-        return {ATTR_LAST_TRIP_TIME: attrs[3]}
+        attributes: dict[str, Any] = {ATTR_LAST_TRIP_TIME: attrs[3]}
+        # Smart events carry the classification that triggered them; ordinary
+        # motion events don't.
+        if attrs[4] is not None:
+            attributes[ATTR_DETECTION_TARGET] = attrs[4]
+        return attributes
 
     @override
     async def async_added_to_hass(self) -> None:
